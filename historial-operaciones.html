@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Historial Completo de Operaciones</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+body { background-color: #0f172a; color: #e2e8f0; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: #1f2937; border-radius: 4px; }
+::-webkit-scrollbar-thumb { background: #374151; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #4b5563; }
+</style>
+</head>
+<body class="p-4 md:p-6 max-w-6xl mx-auto min-h-screen flex flex-col">
+<div class="flex items-center justify-between mb-4 shrink-0">
+<div class="flex items-center gap-3">
+<h1 class="text-xl md:text-xl font-bold text-slate-200 uppercase tracking-wider flex items-center gap-2 leading-tight"><span>⏱️</span> Historial de Operaciones</h1>
+<span id="ops-count" class="text-xs text-slate-400 font-mono bg-slate-800 px-2 py-0.5 rounded border border-slate-700">--</span>
+</div>
+<div class="flex items-center gap-2">
+<a href="index.html" class="text-sm text-slate-400 hover:text-white transition-colors flex items-center gap-2 bg-slate-800 px-4 py-2 md:px-3 md:py-1.5 rounded border border-slate-700 min-h-[44px] md:min-h-0 justify-center"><span>🏠</span> Volver</a>
+<button id="reset-btn" class="bg-slate-700 hover:bg-slate-600 text-slate-200 px-4 py-2 md:px-3 md:py-1.5 rounded-md text-[14px] md:text-[12px] font-bold uppercase tracking-wider transition-colors border border-slate-600 min-h-[44px] md:min-h-0 flex items-center justify-center">Reset</button>
+</div>
+</div>
+<div class="grid grid-cols-1 lg:grid-cols-6 gap-4 md:gap-3 mb-3 shrink-0">
+<div class="bg-[#1e293b] p-3 rounded-xl border border-slate-700 shadow-md lg:col-span-2">
+<div class="text-[10px] text-slate-400 uppercase tracking-wider mb-2">Rango de Fechas</div>
+<div class="grid grid-cols-2 gap-2">
+<input id="start-dt" type="datetime-local" class="bg-slate-800 text-slate-200 text-[14px] md:text-[12px] px-3 py-2 md:px-2 md:py-1 rounded border border-slate-700 min-h-[44px] md:min-h-0 w-full">
+<input id="end-dt" type="datetime-local" class="bg-slate-800 text-slate-200 text-[14px] md:text-[12px] px-3 py-2 md:px-2 md:py-1 rounded border border-slate-700 min-h-[44px] md:min-h-0 w-full">
+</div>
+</div>
+<div class="bg-[#1e293b] p-3 rounded-xl border border-slate-700 shadow-md lg:col-span-1">
+<div class="text-[10px] text-slate-400 uppercase tracking-wider mb-2">Acción</div>
+<select id="action-filter" class="bg-slate-800 text-slate-200 text-[12px] px-2 py-1 rounded border border-slate-700 w-full">
+<option value="">Todas</option>
+<option>Buy</option>
+<option>Sell</option>
+<option>Redeem</option>
+<option>Deposit</option>
+<option>Withdraw</option>
+<option>Withdrawal</option>
+</select>
+</div>
+<div class="bg-[#1e293b] p-3 rounded-xl border border-slate-700 shadow-md lg:col-span-2">
+<div class="text-[10px] text-slate-400 uppercase tracking-wider mb-2">Buscar Mercado</div>
+<input id="market-search" placeholder="Nombre de mercado" class="bg-slate-800 text-slate-200 text-[12px] px-2 py-1 rounded border border-slate-700 w-full">
+</div>
+<div class="bg-[#1e293b] p-3 rounded-xl border border-slate-700 shadow-md lg:col-span-1">
+<div class="text-[10px] text-slate-400 uppercase tracking-wider mb-2">Monto</div>
+<div class="grid grid-cols-2 gap-2">
+<input id="min-amt" type="number" step="0.01" placeholder="Min" class="bg-slate-800 text-slate-200 text-[14px] md:text-[12px] px-3 py-2 md:px-2 md:py-1 rounded border border-slate-700 min-h-[44px] md:min-h-0 w-full">
+<input id="max-amt" type="number" step="0.01" placeholder="Max" class="bg-slate-800 text-slate-200 text-[14px] md:text-[12px] px-3 py-2 md:px-2 md:py-1 rounded border border-slate-700 min-h-[44px] md:min-h-0 w-full">
+</div>
+</div>
+</div>
+<div class="flex-1 overflow-hidden bg-[#1e293b] rounded-xl border border-slate-700 shadow-md flex flex-col">
+<div class="px-3 py-2 border-b border-slate-700 bg-slate-800/50 rounded-t-xl flex justify-between items-center">
+<div class="flex items-center gap-2">
+<span class="text-[10px] font-bold text-blue-300 uppercase tracking-wider">Operaciones</span>
+<span id="active-sort" class="text-[9px] text-slate-500 font-mono">ts desc</span>
+</div>
+<div class="flex items-center gap-2">
+<button id="export-btn" class="bg-slate-700 hover:bg-slate-600 text-slate-200 px-2 py-1.5 rounded-md text-[10px] font-bold uppercase tracking-wider transition-colors border border-slate-600">Exportar CSV</button>
+</div>
+</div>
+<div class="flex-1 overflow-auto overflow-x-auto">
+<table class="min-w-[800px] md:min-w-full text-left">
+<thead class="bg-slate-800/50 sticky top-0">
+<tr>
+<th data-key="timestamp" class="px-3 py-2 md:px-2 md:py-1 text-[12px] md:text-[9px] text-slate-400 uppercase cursor-pointer whitespace-nowrap">Fecha</th>
+<th data-key="action" class="px-3 py-2 md:px-2 md:py-1 text-[12px] md:text-[9px] text-slate-400 uppercase cursor-pointer whitespace-nowrap">Acción</th>
+<th data-key="marketName" class="px-3 py-2 md:px-2 md:py-1 text-[12px] md:text-[9px] text-slate-400 uppercase cursor-pointer whitespace-nowrap">Mercado</th>
+<th data-key="usdcAmount" class="px-3 py-2 md:px-2 md:py-1 text-[12px] md:text-[9px] text-slate-400 uppercase cursor-pointer whitespace-nowrap">Monto</th>
+<th data-key="price" class="px-3 py-2 md:px-2 md:py-1 text-[12px] md:text-[9px] text-slate-400 uppercase cursor-pointer whitespace-nowrap">Precio</th>
+<th data-key="shares" class="px-3 py-2 md:px-2 md:py-1 text-[12px] md:text-[9px] text-slate-400 uppercase cursor-pointer whitespace-nowrap">Acciones</th>
+<th class="px-3 py-2 md:px-2 md:py-1 text-[12px] md:text-[9px] text-slate-400 uppercase whitespace-nowrap">URL</th>
+</tr>
+</thead>
+<tbody id="rows-container"></tbody>
+</table>
+</div>
+</div>
+<script>
+const dbName = 'PolymarketDB';
+const storeName = 'csvData';
+let allRows = [];
+let sortKey = 'timestamp';
+let sortDir = 'desc';
+function initDB(){
+  return new Promise((resolve,reject)=>{
+    const request=indexedDB.open(dbName,1);
+    request.onerror=e=>reject('Error abriendo IndexedDB');
+    request.onupgradeneeded=e=>{
+      const db=e.target.result;
+      if(!db.objectStoreNames.contains(storeName)){
+        db.createObjectStore(storeName,{ keyPath:'id' });
+      }
+    };
+    request.onsuccess=e=>resolve(e.target.result);
+  });
+}
+async function loadData(){
+  try{
+    const db=await initDB();
+    const tx=db.transaction(storeName,'readonly');
+    const store=tx.objectStore(storeName);
+    const req=store.get('latest_data');
+    return await new Promise((resolve)=>{
+      req.onsuccess=()=>resolve(req.result?req.result.rows:null);
+      req.onerror=()=>resolve(null);
+    });
+  }catch(e){
+    return null;
+  }
+}
+function formatMoney(v){return new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(v);}
+function formatDateTs(ts){const d=new Date(parseInt(ts)*1000);return d.toLocaleString('es-ES',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'});}
+function eventUrlForRow(r){
+  const name=(r.marketName||'').toString();
+  if(/^[a-z0-9\-]+\-\d+$/.test(name)) return 'https://polymarket.com/event/'+name;
+  if(!r.action||!['Buy','Sell','Redeem'].includes(r.action)) return '';
+  const ts=parseInt(r.timestamp);
+  const match=name.match(/(\d{1,2}):(\d{2})\s*(AM|PM)?\s*ET?$/i) || name.match(/-(\d{1,2}):(\d{2})\s*(AM|PM)?\s*ET/i) || name.match(/(\d{1,2}):(\d{2})\s*(AM|PM)?\s*-\s*(\d{1,2}):(\d{2})\s*(AM|PM)?\s*ET/i);
+  let endMinute=null;
+  if(match){
+    if(match.length>=6){endMinute=parseInt(match[5],10);} else {endMinute=parseInt(match[2],10);}
+  }
+  const base=Math.ceil(ts/300)*300;
+  const candidates=[base,base+300,base-300];
+  let chosen=base;
+  if(endMinute!==null){
+    for(const c of candidates){
+      const m=new Date(c*1000).getUTCMinutes();
+      if(m===endMinute){chosen=c;break;}
+    }
+  }
+  return 'https://polymarket.com/event/btc-updown-5m-'+chosen;
+}
+function applyFilters(){
+  const startVal=document.getElementById('start-dt').value;
+  const endVal=document.getElementById('end-dt').value;
+  const action=document.getElementById('action-filter').value;
+  const search=document.getElementById('market-search').value.trim().toLowerCase();
+  const minAmt=parseFloat(document.getElementById('min-amt').value)||null;
+  const maxAmt=parseFloat(document.getElementById('max-amt').value)||null;
+  let rows=[...allRows];
+  rows=rows.filter(r=>{
+    const ts=parseInt(r.timestamp);
+    if(startVal){const sTs=Math.floor(new Date(startVal).getTime()/1000);if(ts<sTs)return false;}
+    if(endVal){const eTs=Math.floor(new Date(endVal).getTime()/1000);if(ts>eTs)return false;}
+    if(action&&r.action!==action)return false;
+    const m=(r.marketName||'').toLowerCase();
+    if(search&&(!m.includes(search)))return false;
+    const amt=parseFloat(r.usdcAmount)||0;
+    if(minAmt!==null&&amt<minAmt)return false;
+    if(maxAmt!==null&&amt>maxAmt)return false;
+    return true;
+  });
+  rows.sort((a,b)=>{
+    let av=a[sortKey],bv=b[sortKey];
+    if(sortKey==='timestamp'||sortKey==='usdcAmount'||sortKey==='price'||sortKey==='shares'){
+      av=parseFloat(av)||0;bv=parseFloat(bv)||0;
+    }else{
+      av=(av||'').toString();bv=(bv||'').toString();
+    }
+    if(sortDir==='asc'){return av>bv?1:av<bv?-1:0;}else{return av<bv?1:av>bv?-1:0;}
+  });
+  document.getElementById('ops-count').innerText=rows.length;
+  document.getElementById('active-sort').innerText=sortKey+' '+sortDir;
+  const body=document.getElementById('rows-container');
+  body.innerHTML=rows.map(r=>{
+    const amt=parseFloat(r.usdcAmount)||0;
+    const price=parseFloat(r.price)||0;
+    const shares=parseFloat(r.shares)||0;
+    const url=eventUrlForRow(r);
+    const actionColor=r.action==='Buy'?'text-red-400':(r.action==='Sell'||r.action==='Redeem')?'text-emerald-400':'text-slate-300';
+    return `
+<tr class="border-b border-slate-700/50 hover:bg-slate-800/30 transition-colors">
+<td class="px-3 py-2 md:px-2 md:py-1 text-[13px] md:text-[10px] font-mono text-slate-300 whitespace-nowrap">${formatDateTs(r.timestamp)}</td>
+<td class="px-3 py-2 md:px-2 md:py-1 text-[13px] md:text-[10px] font-bold ${actionColor} uppercase whitespace-nowrap">${r.action||'--'}</td>
+<td class="px-3 py-2 md:px-2 md:py-1 text-[13px] md:text-[10px] text-slate-300 whitespace-nowrap">${r.marketName||'--'}</td>
+<td class="px-3 py-2 md:px-2 md:py-1 text-[13px] md:text-[10px] font-mono ${r.action==='Buy'?'text-red-400':'text-emerald-400'} whitespace-nowrap">${formatMoney(amt)}</td>
+<td class="px-3 py-2 md:px-2 md:py-1 text-[13px] md:text-[10px] font-mono text-slate-300 whitespace-nowrap">${price?('$'+price.toFixed(4)):'--'}</td>
+<td class="px-3 py-2 md:px-2 md:py-1 text-[13px] md:text-[10px] font-mono text-slate-300 whitespace-nowrap">${shares?shares.toFixed(2):'--'}</td>
+<td class="px-3 py-2 md:px-2 md:py-1 text-[13px] md:text-[10px]">
+${url?`<a href="${url}" target="_blank" class="text-blue-300 hover:text-blue-200 bg-[#0f172a] px-3 py-2 md:px-1.5 md:py-0.5 rounded border border-blue-500/30 flex items-center justify-center min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0">↗</a>`:'<span class="text-slate-600">--</span>'}
+</td>
+</tr>`}).join('');
+}
+function attachSortHandlers(){
+  document.querySelectorAll('th[data-key]').forEach(th=>{
+    th.addEventListener('click',()=>{
+      const key=th.getAttribute('data-key');
+      if(sortKey===key){sortDir=sortDir==='asc'?'desc':'asc';}
+      else{sortKey=key;sortDir='desc';}
+      applyFilters();
+    });
+  });
+}
+function exportCSV(){
+  const rows=document.querySelectorAll('#rows-container tr');
+  let csv='fecha,action,market,amount,price,shares,url\n';
+  rows.forEach(tr=>{
+    const tds=tr.querySelectorAll('td');
+    const fecha=tds[0].innerText;
+    const action=tds[1].innerText;
+    const market=tds[2].innerText;
+    const amount=tds[3].innerText;
+    const price=tds[4].innerText;
+    const shares=tds[5].innerText;
+    const linkEl=tds[6].querySelector('a');
+    const url=linkEl?linkEl.getAttribute('href'):'';
+    csv+=[fecha,action,market,amount,price,shares,url].map(v=>`"${v.replace(/"/g,'""')}"`).join(',')+'\n';
+  });
+  const blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;a.download='historial_operaciones.csv';
+  document.body.appendChild(a);a.click();document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+async function init(){
+  const body=document.getElementById('rows-container');
+  body.innerHTML='<tr><td class="px-2 py-3 text-center text-slate-500 text-[10px]" colspan="7">Cargando datos...</td></tr>';
+  const data=await loadData();
+  if(!data||data.length===0){
+    body.innerHTML='<tr><td class="px-2 py-3 text-center text-slate-500 text-[10px]" colspan="7">No hay datos. Sube tus CSV en el Dashboard.</td></tr>';
+    return;
+  }
+  allRows=data.map(r=>({
+    timestamp:r.timestamp,action:r.action,marketName:r.marketName,usdcAmount:r.usdcAmount,price:r.price,shares:r.shares
+  })).sort((a,b)=>parseInt(a.timestamp)-parseInt(b.timestamp));
+  const endTsMap = {};
+  allRows.forEach(r=>{
+    const name=(r.marketName||'').toString();
+    const ts=parseInt(r.timestamp);
+    if(!name||isNaN(ts)) return;
+    if(endTsMap[name]===undefined || ts < endTsMap[name].first){
+      endTsMap[name] = { first: ts };
+    }
+  });
+  Object.keys(endTsMap).forEach(name=>{
+    const first=endTsMap[name].first;
+    endTsMap[name] = Math.floor(first/300)*300 + 300;
+  });
+  window.__marketEndTsMap = endTsMap;
+  attachSortHandlers();
+  applyFilters();
+  document.getElementById('market-search').addEventListener('input',applyFilters);
+  document.getElementById('action-filter').addEventListener('change',applyFilters);
+  document.getElementById('start-dt').addEventListener('change',applyFilters);
+  document.getElementById('end-dt').addEventListener('change',applyFilters);
+  document.getElementById('min-amt').addEventListener('input',applyFilters);
+  document.getElementById('max-amt').addEventListener('input',applyFilters);
+  document.getElementById('export-btn').addEventListener('click',exportCSV);
+  document.getElementById('reset-btn').addEventListener('click',()=>{
+    document.getElementById('start-dt').value='';
+    document.getElementById('end-dt').value='';
+    document.getElementById('action-filter').value='';
+    document.getElementById('market-search').value='';
+    document.getElementById('min-amt').value='';
+    document.getElementById('max-amt').value='';
+    sortKey='timestamp';sortDir='desc';
+    applyFilters();
+  });
+}
+init();
+</script>
+</body>
+</html>

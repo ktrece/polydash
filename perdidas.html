@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mercados Fallidos - Polymarket BI</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            background-color: #0f172a;
+            color: #e2e8f0;
+        }
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #1f2937; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb { background: #374151; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #4b5563; }
+    </style>
+</head>
+<body class="p-6 max-w-5xl mx-auto h-screen flex flex-col">
+    <div class="flex items-center justify-between mb-6 shrink-0">
+        <div class="flex flex-col">
+            <h1 class="text-2xl font-bold text-red-400 flex items-center gap-2 uppercase tracking-wider">
+                <span>📉</span> Mercados Fallidos
+            </h1>
+            <span class="text-xs text-slate-400 font-medium tracking-wide">Desglose detallado de pérdidas y capital retenido</span>
+        </div>
+        <a href="index.html" class="text-sm text-slate-400 hover:text-white transition-colors flex items-center gap-1 bg-slate-800 px-3 py-1.5 rounded border border-slate-700">
+            <span>🏠</span> Volver al Dashboard
+        </a>
+    </div>
+
+    <!-- Resumen -->
+    <div class="grid grid-cols-3 gap-4 mb-6 shrink-0" id="summary-cards">
+        <div class="bg-[#1e293b] p-4 rounded-xl border border-slate-700 shadow-lg text-center">
+            <span class="text-xs text-slate-400 uppercase tracking-wider block mb-1">Total Mercados Fallidos</span>
+            <span class="text-xl font-black text-slate-200" id="total-markets">--</span>
+        </div>
+        <div class="bg-[#1e293b] p-4 rounded-xl border border-slate-700 shadow-lg text-center">
+            <span class="text-xs text-slate-400 uppercase tracking-wider block mb-1">Pérdida Neta Total</span>
+            <span class="text-xl font-black text-red-400" id="total-loss">--</span>
+        </div>
+        <div class="bg-[#1e293b] p-4 rounded-xl border border-slate-700 shadow-lg text-center">
+            <span class="text-xs text-slate-400 uppercase tracking-wider block mb-1">Peor Operación</span>
+            <span class="text-xl font-black text-orange-400" id="worst-loss">--</span>
+        </div>
+    </div>
+
+    <div class="flex-1 overflow-y-auto pr-2 flex flex-col gap-3 pb-6" id="losses-list">
+        <div class="text-center text-slate-500 py-10">Cargando datos...</div>
+    </div>
+
+    <script>
+        const BOT_START_TS = 1774132800; // Mismo offset que en index.html
+        
+        function formatMoney(value) {
+            return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
+        }
+
+        function formatDate(timestamp) {
+            if (!timestamp) return '--';
+            const date = new Date(timestamp * 1000);
+            return date.toLocaleString('es-ES', { 
+                day: '2-digit', month: '2-digit', year: 'numeric',
+                hour: '2-digit', minute: '2-digit'
+            });
+        }
+
+        // --- MANEJO DE ALMACENAMIENTO LOCAL (IndexedDB) ---
+        const dbName = 'PolymarketDB';
+        const storeName = 'csvData';
+
+        function initDB() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(dbName, 1);
+                request.onerror = event => reject("Error abriendo IndexedDB");
+                request.onsuccess = event => resolve(event.target.result);
+                request.onupgradeneeded = event => {
+                    const db = event.target.result;
+                    if (!db.objectStoreNames.contains(storeName)) {
+                        db.createObjectStore(storeName, { keyPath: 'id' });
+                    }
+                };
+            });
+        }
+
+        async function loadData() {
+            try {
+                const db = await initDB();
+                const tx = db.transaction(storeName, 'readonly');
+                const store = tx.objectStore(storeName);
+                const request = store.get('latest_data');
+                return new Promise((resolve, reject) => {
+                    request.onsuccess = () => resolve(request.result ? request.result.rows : null);
+                    request.onerror = () => reject("Error leyendo datos");
+                });
+            } catch (e) {
+                console.error("No se pudo cargar de IndexedDB", e);
+                return null;
+            }
+        }
+
+        async function init() {
+            const data = await loadData();
+            if (!data || data.length === 0) {
+                document.getElementById('losses-list').innerHTML = '<div class="text-center text-slate-500 py-10">No hay datos disponibles. Sube tus CSV en el Dashboard.</div>';
+                return;
+            }
+
+            let markets = {};
+
+            data.forEach(row => {
+                const ts = parseInt(row.timestamp);
+                if (isNaN(ts)) return;
+
+                const mName = row.marketName;
+                const displayName = (mName === 'undefined' || !mName) ? new Date(ts * 1000).toLocaleString('es-ES', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : mName;
+                
+                if (!markets[mName]) {
+                    markets[mName] = { cost: 0, redeem: 0, buys: 0, sells: 0, first_ts: ts, last_ts: ts, name: displayName, realName: mName };
+                }
+
+                const amt = parseFloat(row.usdcAmount) || 0;
+                
+                if (row.action === 'Buy') {
+                    markets[mName].cost += amt;
+                    markets[mName].buys += 1;
+                } else if (row.action === 'Redeem' || row.action === 'Sell') {
+                    markets[mName].redeem += amt;
+                    markets[mName].sells += 1;
+                }
+
+                markets[mName].first_ts = Math.min(markets[mName].first_ts, ts);
+                markets[mName].last_ts = Math.max(markets[mName].last_ts, ts);
+            });
+
+            // Filtrar solo mercados con pérdidas y operados por el bot (>= BOT_START_TS)
+            const losingMarkets = Object.values(markets).filter(m => m.first_ts >= BOT_START_TS && (m.redeem - m.cost) < -0.001);
+
+            // Ordenar por pérdida neta (los que más perdieron primero)
+            losingMarkets.sort((a, b) => (a.redeem - a.cost) - (b.redeem - b.cost));
+
+            let totalLoss = 0;
+            let worstLoss = 0;
+
+            const listEl = document.getElementById('losses-list');
+            listEl.innerHTML = '';
+
+            if (losingMarkets.length === 0) {
+                listEl.innerHTML = `
+                    <div class="flex flex-col items-center justify-center py-20 text-slate-500">
+                        <span class="text-4xl mb-3">🎉</span>
+                        <h2 class="text-lg font-bold text-slate-300">¡Sin pérdidas registradas!</h2>
+                        <p class="text-sm mt-1">El bot no ha cerrado ningún mercado en negativo.</p>
+                    </div>`;
+                document.getElementById('total-markets').innerText = '0';
+                document.getElementById('total-loss').innerText = '$0.00';
+                document.getElementById('worst-loss').innerText = '$0.00';
+                return;
+            }
+
+            losingMarkets.forEach(m => {
+                const net = m.redeem - m.cost;
+                totalLoss += net;
+                if (net < worstLoss) worstLoss = net;
+
+                // Determinar estado (si no tiene ventas/redeems, es posible que esté retenido o 100% perdido)
+                let statusBadge = '';
+                if (m.sells === 0 && m.redeem === 0) {
+                    statusBadge = '<span class="bg-red-900/40 text-red-300 border border-red-800/50 px-2 py-0.5 rounded text-[9px] uppercase tracking-wider font-bold">100% Perdido / Retenido</span>';
+                } else {
+                    statusBadge = '<span class="bg-orange-900/40 text-orange-300 border border-orange-800/50 px-2 py-0.5 rounded text-[9px] uppercase tracking-wider font-bold">Pérdida Parcial</span>';
+                }
+
+                listEl.innerHTML += `
+                    <a href="mercado-fallido-detalle.html?market=${encodeURIComponent(m.realName)}&ts=${m.first_ts}" target="_blank" class="bg-[#1e293b] p-4 rounded-xl border border-slate-700 shadow-md flex flex-col md:flex-row md:items-center justify-between gap-4 hover:border-red-500/50 hover:bg-[#1e293b]/80 transition-all group relative overflow-hidden cursor-pointer block">
+                        <div class="absolute top-0 left-0 bottom-0 w-1 bg-red-500/50 group-hover:bg-red-500 transition-colors"></div>
+                        <div class="flex-1 pl-2">
+                            <h3 class="text-sm font-bold text-slate-200 mb-1 leading-tight group-hover:text-white transition-colors">${m.name}</h3>
+                            <div class="flex items-center gap-3 mt-2">
+                                ${statusBadge}
+                                <div class="text-[10px] text-slate-400 font-mono flex items-center gap-1" title="Inicio de operación">
+                                    <span>🕒</span> ${formatDate(m.first_ts)}
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="grid grid-cols-2 md:flex md:items-center gap-3 md:gap-6 shrink-0 bg-[#0f172a] p-3 rounded-lg border border-slate-700/50 group-hover:border-slate-600 transition-colors">
+                            <div class="flex flex-col">
+                                <span class="text-[9px] text-slate-500 uppercase tracking-wider font-bold mb-0.5">Invertido (Cost)</span>
+                                <span class="text-xs font-mono text-slate-300">${formatMoney(m.cost)}</span>
+                                <span class="text-[8px] text-slate-500 mt-0.5">${m.buys} transacciones</span>
+                            </div>
+                            <div class="flex flex-col">
+                                <span class="text-[9px] text-slate-500 uppercase tracking-wider font-bold mb-0.5">Recuperado</span>
+                                <span class="text-xs font-mono text-slate-300">${formatMoney(m.redeem)}</span>
+                                <span class="text-[8px] text-slate-500 mt-0.5">${m.sells} transacciones</span>
+                            </div>
+                            <div class="flex flex-col col-span-2 md:col-span-1 md:border-l md:border-slate-700 md:pl-6">
+                                <span class="text-[9px] text-slate-500 uppercase tracking-wider font-bold mb-0.5">Pérdida Neta</span>
+                                <span class="text-sm font-black text-red-400 drop-shadow-sm group-hover:scale-105 transition-transform origin-left">${formatMoney(net)}</span>
+                            </div>
+                            <div class="flex items-center">
+                                <button onclick="event.stopPropagation(); window.open('${'https://polymarket.com/event/btc-updown-5m-' + (Math.floor(m.first_ts / 300) * 300 + 300)}', '_blank')" class="text-[9px] bg-blue-900/30 text-blue-300 hover:bg-blue-900/50 hover:text-blue-200 px-2 py-1 rounded border border-blue-700/50">
+                                    Ver en Polymarket ↗
+                                </button>
+                            </div>
+                            <div class="hidden md:flex items-center justify-center pl-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <span class="text-slate-400 text-xl">→</span>
+                            </div>
+                        </div>
+                    </a>
+                `;
+            });
+
+            document.getElementById('total-markets').innerText = losingMarkets.length;
+            document.getElementById('total-loss').innerText = formatMoney(totalLoss);
+            document.getElementById('worst-loss').innerText = formatMoney(worstLoss);
+        }
+
+        init();
+    </script>
+</body>
+</html>

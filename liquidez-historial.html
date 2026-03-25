@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Historial de Liquidez - Polymarket BI</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Incluimos moment.js y el adaptador de fecha para Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/moment@2.29.4/moment.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-moment@1.0.1/dist/chartjs-adapter-moment.min.js"></script>
+    <link rel="icon" type="image/x-icon" href="profile-image-5936167-467b5244-f7ba-4793-b3ab-9da426f18e60.ico">
+    <style>
+        body { background-color: #020617; color: #f8fafc; font-family: 'Inter', sans-serif; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(51, 65, 85, 0.8); border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(71, 85, 105, 1); }
+    </style>
+</head>
+<body class="h-screen flex flex-col overflow-hidden">
+    
+    <header class="h-14 bg-[#1e293b] border-b border-slate-700 flex items-center justify-between px-4 shrink-0 shadow-md z-10">
+        <div class="flex items-center gap-3">
+            <div class="cursor-pointer hover:opacity-80 transition-opacity" onclick="window.close()" title="Cerrar y Volver">
+                <img src="profile-image-5936167-467b5244-f7ba-4793-b3ab-9da426f18e60.webp" alt="Bot Logo" class="w-11 h-11 rounded-full border border-indigo-500/50 shadow-sm object-cover">
+            </div>
+            <div class="flex flex-col pl-2">
+                <span class="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Historial de Liquidez</span>
+                <span class="text-[14px] font-black text-emerald-400 tracking-wide" id="current-balance">Cargando...</span>
+            </div>
+        </div>
+        <div>
+            <button onclick="window.close()" class="bg-slate-700 hover:bg-slate-600 text-white text-xs font-bold py-1.5 px-3 rounded transition-colors">
+                Cerrar Pestaña
+            </button>
+        </div>
+    </header>
+
+    <main class="flex-1 flex flex-col p-4 min-h-0 overflow-hidden relative">
+        <div id="loading" class="absolute inset-0 bg-[#020617]/90 flex flex-col items-center justify-center z-50">
+            <div class="text-4xl animate-bounce mb-4">📊</div>
+            <h2 class="text-lg font-bold text-emerald-400 mb-2">Construyendo Historial</h2>
+            <p class="text-slate-400 text-sm">Procesando datos de tus operaciones...</p>
+        </div>
+
+        <div class="bg-[#0f172a] rounded-xl border border-slate-800 p-4 flex-1 min-h-0 flex flex-col shadow-xl">
+            <div class="flex justify-between items-center mb-4 shrink-0">
+                <h2 class="text-sm font-black text-slate-200 uppercase tracking-wider flex items-center gap-2">
+                    <span class="text-emerald-400">📈</span> Evolución del Available Balance
+                </h2>
+                <div class="flex gap-4">
+                    <div class="flex flex-col text-right">
+                        <span class="text-[9px] text-slate-500 uppercase font-bold">Balance Inicial</span>
+                        <span class="text-xs font-bold text-slate-300" id="stat-initial">--</span>
+                    </div>
+                    <div class="flex flex-col text-right">
+                        <span class="text-[9px] text-slate-500 uppercase font-bold">Pico Máximo</span>
+                        <span class="text-xs font-bold text-emerald-400" id="stat-max">--</span>
+                    </div>
+                    <div class="flex flex-col text-right">
+                        <span class="text-[9px] text-slate-500 uppercase font-bold">Punto Más Bajo</span>
+                        <span class="text-xs font-bold text-red-400" id="stat-min">--</span>
+                    </div>
+                </div>
+            </div>
+            <div class="flex-1 min-h-0 relative w-full h-full">
+                <canvas id="liquidityChart"></canvas>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // IndexedDB logic
+        const dbName = 'PolymarketDB';
+        const storeName = 'csvData';
+
+        function initDB() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(dbName, 1);
+                request.onerror = event => reject("Error abriendo IndexedDB");
+                request.onsuccess = event => resolve(event.target.result);
+                request.onupgradeneeded = event => {
+                    const db = event.target.result;
+                    if (!db.objectStoreNames.contains(storeName)) {
+                        db.createObjectStore(storeName, { keyPath: 'id' });
+                    }
+                };
+            });
+        }
+
+        async function loadData() {
+            try {
+                const db = await initDB();
+                const tx = db.transaction(storeName, 'readonly');
+                const store = tx.objectStore(storeName);
+                const request = store.get('latest_data');
+                return new Promise((resolve, reject) => {
+                    request.onsuccess = () => resolve(request.result ? request.result.rows : null);
+                    request.onerror = () => reject("Error leyendo datos");
+                });
+            } catch (e) {
+                console.error("No se pudo cargar de IndexedDB", e);
+                return null;
+            }
+        }
+
+        // Formato moneda
+        function formatMoney(num) {
+            return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(num);
+        }
+
+        let liquidityChart = null;
+
+        async function buildHistory() {
+            const data = await loadData();
+            if (!data || data.length === 0) {
+                document.getElementById('loading').innerHTML = `
+                    <div class="text-3xl mb-2">⚠️</div>
+                    <h2 class="text-lg font-bold text-red-400">No hay datos disponibles</h2>
+                    <p class="text-slate-400 text-sm">Vuelve al dashboard y sube un archivo CSV primero.</p>
+                `;
+                return;
+            }
+
+            // Obtener el offset base que iguala el balance final
+            let offsets = JSON.parse(localStorage.getItem('polyOffsets'));
+            
+            // Reconstruir el balance hacia atrás desde el balance final conocido
+            const final_available = parseFloat(localStorage.getItem('cachedAvailableBalance')) || 0;
+            
+            // Ordenar datos cronológicamente (del más antiguo al más reciente) usando timestamp
+            const sortedData = [...data]
+                .filter(row => row.timestamp && !isNaN(parseInt(row.timestamp)))
+                .sort((a, b) => parseInt(a.timestamp) - parseInt(b.timestamp));
+
+            // Primero calculamos el flujo neto total para poder encontrar el balance inicial real
+            let total_cash_flow = 0;
+            sortedData.forEach(row => {
+                // Soportar diferentes nombres de columnas según la versión del CSV
+                let rawAmt = row.amount || row.usdcAmount || row.Amount || '0';
+                const amt = parseFloat(String(rawAmt).replace(/[$,]/g, '')) || 0;
+                const action = row.action || row.Action;
+                
+                if (action === 'Deposit' || action === 'Sell' || action === 'Redeem') {
+                    total_cash_flow += amt;
+                } else if (action === 'Withdraw' || action === 'Withdrawal' || action === 'Buy') {
+                    total_cash_flow -= amt;
+                }
+            });
+
+            // El balance inicial es el balance final menos todo el flujo de caja
+            let initial_balance = final_available - total_cash_flow;
+            let current_balance = initial_balance;
+            
+            const historyPoints = [];
+            
+            let minBalance = current_balance;
+            let maxBalance = current_balance;
+
+            // Registrar el punto inicial (antes del primer trade)
+            if (sortedData.length > 0) {
+                const firstDate = new Date(parseInt(sortedData[0].timestamp) * 1000);
+                // Restar 1 segundo para el punto inicial
+                historyPoints.push({
+                    x: new Date(firstDate.getTime() - 1000),
+                    y: current_balance
+                });
+            }
+
+            // Para no sobrecargar la gráfica si hay demasiados puntos, agrupamos por día el último balance,
+            // O podemos mostrar todos los puntos. Vamos a guardar un punto por cada cambio de balance.
+            const useDailyAggregation = sortedData.length > 20000; // Desactivado para datasets normales
+            const dailyMap = new Map();
+
+            sortedData.forEach(row => {
+                let rawAmt = row.amount || row.usdcAmount || row.Amount || '0';
+                const amt = parseFloat(String(rawAmt).replace(/[$,]/g, '')) || 0;
+                const action = row.action || row.Action;
+                
+                let changed = false;
+                // Importante: Deposit suma liquidez, Withdraw la resta
+                // Buy RESTA liquidez (compras participaciones con tu cash)
+                // Sell SUMA liquidez (vendes participaciones por cash)
+                // Redeem SUMA liquidez (cobras la posición ganadora)
+                if (action === 'Deposit' || action === 'Sell' || action === 'Redeem') {
+                    current_balance += amt;
+                    changed = true;
+                } else if (action === 'Withdraw' || action === 'Withdrawal' || action === 'Buy') {
+                    current_balance -= amt;
+                    changed = true;
+                }
+
+                if (changed) {
+                    if (current_balance > maxBalance) maxBalance = current_balance;
+                    if (current_balance < minBalance) minBalance = current_balance;
+
+                    const dateObj = new Date(parseInt(row.timestamp) * 1000);
+                    
+                    if (useDailyAggregation) {
+                        const dayKey = dateObj.toLocaleDateString();
+                        dailyMap.set(dayKey, { x: dateObj, y: current_balance });
+                    } else {
+                        historyPoints.push({
+                            x: dateObj,
+                            y: current_balance
+                        });
+                    }
+                }
+            });
+
+            let finalPoints = historyPoints;
+            if (useDailyAggregation) {
+                // Convert dailyMap values back to an array sorted by date
+                finalPoints = Array.from(dailyMap.values()).sort((a, b) => a.x - b.x);
+            }
+
+            // Validar que tenemos datos para mostrar
+            console.log("Puntos para la gráfica:", finalPoints.length);
+            if (finalPoints.length <= 1) {
+                document.getElementById('loading').innerHTML = `
+                    <div class="text-3xl mb-2">📉</div>
+                    <h2 class="text-lg font-bold text-yellow-400">Pocos Datos</h2>
+                    <p class="text-slate-400 text-sm">No hay suficientes variaciones de balance para trazar una gráfica.</p>
+                `;
+                return;
+            }
+
+            // Actualizar UI stats
+            document.getElementById('current-balance').innerText = formatMoney(current_balance);
+            document.getElementById('stat-initial').innerText = formatMoney(initial_balance);
+            document.getElementById('stat-max').innerText = formatMoney(maxBalance);
+            document.getElementById('stat-min').innerText = formatMoney(minBalance);
+
+            // Renderizar Gráfica
+            renderChart(finalPoints);
+
+            // Ocultar carga
+            document.getElementById('loading').style.display = 'none';
+        }
+
+        function renderChart(dataPoints) {
+            const ctx = document.getElementById('liquidityChart').getContext('2d');
+            
+            // Gradiente para el área
+            const gradient = ctx.createLinearGradient(0, 0, 0, 400);
+            gradient.addColorStop(0, 'rgba(52, 211, 153, 0.4)'); // Emerald 400
+            gradient.addColorStop(1, 'rgba(52, 211, 153, 0.0)');
+
+            liquidityChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    datasets: [{
+                        label: 'Available Balance ($)',
+                        data: dataPoints,
+                        borderColor: '#34d399', // emerald-400
+                        backgroundColor: gradient,
+                        borderWidth: 2,
+                        pointRadius: 0, // Ocultar puntos para una línea limpia
+                        pointHoverRadius: 5,
+                        pointHoverBackgroundColor: '#fff',
+                        pointHoverBorderColor: '#34d399',
+                        fill: true,
+                        tension: 0.1 // Suavizado leve
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: {
+                        intersect: false,
+                        mode: 'index',
+                    },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            backgroundColor: 'rgba(15, 23, 42, 0.9)',
+                            titleColor: '#94a3b8',
+                            bodyColor: '#34d399',
+                            bodyFont: { weight: 'bold', size: 14 },
+                            borderColor: '#334155',
+                            borderWidth: 1,
+                            padding: 12,
+                            displayColors: false,
+                            callbacks: {
+                                label: function(context) {
+                                    return formatMoney(context.parsed.y);
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: {
+                                tooltipFormat: 'dd MMM yyyy, HH:mm',
+                                displayFormats: {
+                                    millisecond: 'HH:mm:ss.SSS',
+                                    second: 'HH:mm:ss',
+                                    minute: 'HH:mm',
+                                    hour: 'HH:mm',
+                                    day: 'dd MMM',
+                                    week: 'dd MMM',
+                                    month: 'MMM yyyy',
+                                    quarter: 'MMM yyyy',
+                                    year: 'yyyy'
+                                }
+                            },
+                            grid: {
+                                color: 'rgba(51, 65, 85, 0.3)',
+                                drawBorder: false
+                            },
+                            ticks: {
+                                color: '#64748b',
+                                maxRotation: 0,
+                                autoSkip: true,
+                                maxTicksLimit: 10
+                            }
+                        },
+                        y: {
+                            grid: {
+                                color: 'rgba(51, 65, 85, 0.3)',
+                                drawBorder: false
+                            },
+                            ticks: {
+                                color: '#94a3b8',
+                                callback: function(value) {
+                                    return '$' + value;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Iniciar
+        document.addEventListener('DOMContentLoaded', buildHistory);
+
+    </script>
+</body>
+</html>

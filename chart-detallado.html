@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Análisis Temporal Detallado - Polymarket BI</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <style>
+        body { background-color: #0f172a; color: #e2e8f0; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #1f2937; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb { background: #374151; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #4b5563; }
+    </style>
+</head>
+<body class="p-4 md:p-6 max-w-[1600px] mx-auto h-screen flex flex-col overflow-hidden">
+    <div class="flex items-center justify-between mb-4 shrink-0">
+        <div class="flex flex-col">
+            <h1 class="text-xl md:text-2xl font-bold text-blue-400 flex items-center gap-2 uppercase tracking-wider">
+                <span>📈</span> <span id="page-title">Análisis Detallado (5 Minutos)</span>
+            </h1>
+            <span class="text-xs text-slate-400 font-medium tracking-wide mt-1" id="date-subtitle">Cargando datos...</span>
+        </div>
+        <div class="flex gap-3 items-center">
+            <div id="monthly-controls" class="hidden flex gap-2 mr-4">
+                <select id="interval-select" class="text-xs text-slate-300 bg-[#0f172a] px-2 py-1.5 rounded border border-slate-600 shadow-sm focus:outline-none focus:border-blue-500 transition-colors">
+                    <option value="1h">Franjas de 1 Hora</option>
+                    <option value="24h">Franjas de 24 Horas</option>
+                    <option value="48h">Franjas de 48 Horas</option>
+                    <option value="weekly">Franjas Semanales</option>
+                </select>
+                <select id="month-select" class="text-xs text-slate-300 bg-[#0f172a] px-2 py-1.5 rounded border border-slate-600 shadow-sm focus:outline-none focus:border-blue-500 transition-colors">
+                    <!-- Options populated dynamically -->
+                </select>
+            </div>
+            <button onclick="window.close()" class="text-sm text-slate-400 hover:text-white transition-colors flex items-center gap-1 bg-slate-800 px-3 py-1.5 rounded border border-slate-700 shadow">
+                <span>✖</span> Cerrar
+            </button>
+        </div>
+    </div>
+
+    <!-- KPIs -->
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4 shrink-0">
+        <div class="bg-[#1e293b] p-3 rounded-xl border border-slate-700 shadow-lg">
+            <span class="text-[9px] text-slate-400 uppercase tracking-wider block mb-1">Beneficio Periodo</span>
+            <span class="text-lg font-black" id="kpi-profit">--</span>
+        </div>
+        <div class="bg-[#1e293b] p-3 rounded-xl border border-slate-700 shadow-lg">
+            <span class="text-[9px] text-slate-400 uppercase tracking-wider block mb-1">Total Invertido</span>
+            <span class="text-lg font-mono text-slate-200" id="kpi-invested">--</span>
+        </div>
+        <div class="bg-[#1e293b] p-3 rounded-xl border border-slate-700 shadow-lg">
+            <span class="text-[9px] text-slate-400 uppercase tracking-wider block mb-1">Apuestas Realizadas</span>
+            <span class="text-lg font-mono text-blue-300" id="kpi-bets">--</span>
+        </div>
+        <div class="bg-[#1e293b] p-3 rounded-xl border border-slate-700 shadow-lg">
+            <span class="text-[9px] text-slate-400 uppercase tracking-wider block mb-1">Franjas Activas (5m)</span>
+            <span class="text-lg font-mono text-purple-300" id="kpi-intervals">--</span>
+        </div>
+    </div>
+
+    <!-- Chart Container -->
+    <div class="flex-1 min-h-0 bg-[#1e293b] rounded-xl border border-slate-700 shadow-xl p-4 relative flex flex-col">
+        <div id="loading" class="absolute inset-0 bg-[#1e293b]/90 flex flex-col items-center justify-center z-10 rounded-xl">
+            <div class="text-4xl animate-spin mb-2">⏳</div>
+            <p class="text-slate-400 text-sm">Procesando franjas de 5 minutos...</p>
+        </div>
+        <div class="flex-1 relative w-full h-full">
+            <canvas id="detailedChart"></canvas>
+        </div>
+    </div>
+
+    <script>
+        const BOT_START_TS = 1774132800; // Same offset as index.html
+        let chartInstance = null;
+
+        function formatMoney(value) {
+            return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
+        }
+
+        // IndexedDB Logic
+        const dbName = 'PolymarketDB';
+        const storeName = 'csvData';
+
+        function initDB() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(dbName, 1);
+                request.onerror = event => reject("Error abriendo IndexedDB");
+                request.onsuccess = event => resolve(event.target.result);
+            });
+        }
+
+        async function loadData() {
+            try {
+                const db = await initDB();
+                const tx = db.transaction(storeName, 'readonly');
+                const store = tx.objectStore(storeName);
+                const request = store.get('latest_data');
+                return new Promise((resolve, reject) => {
+                    request.onsuccess = () => resolve(request.result ? request.result.rows : null);
+                    request.onerror = () => reject("Error leyendo datos");
+                });
+            } catch (e) {
+                console.error("No se pudo cargar de IndexedDB", e);
+                return null;
+            }
+        }
+
+        let globalBotData = [];
+        let currentViewType = 'daily';
+
+        async function init() {
+            const urlParams = new URLSearchParams(window.location.search);
+            currentViewType = urlParams.get('type') || 'daily';
+
+            if (currentViewType === 'annual') {
+                document.getElementById('page-title').innerText = 'Análisis Mensual (Franjas Agrupadas)';
+                document.getElementById('monthly-controls').classList.remove('hidden');
+                
+                // Add event listeners to selects
+                document.getElementById('interval-select').addEventListener('change', renderChart);
+                document.getElementById('month-select').addEventListener('change', renderChart);
+            } else {
+                document.getElementById('page-title').innerText = 'Análisis Diario (Franjas 5 Min)';
+            }
+
+            const data = await loadData();
+            if (!data || data.length === 0) {
+                document.getElementById('loading').innerHTML = '<p class="text-red-400">No hay datos disponibles.</p>';
+                return;
+            }
+
+            // Filtrar datos del bot
+            globalBotData = data.filter(row => {
+                const ts = parseInt(row.timestamp);
+                return !isNaN(ts) && ts >= BOT_START_TS;
+            }).sort((a, b) => parseInt(a.timestamp) - parseInt(b.timestamp));
+
+            if (globalBotData.length === 0) {
+                document.getElementById('loading').innerHTML = '<p class="text-red-400">No hay datos del bot.</p>';
+                return;
+            }
+
+            if (currentViewType === 'annual') {
+                populateMonthSelector();
+            }
+
+            renderChart();
+        }
+
+        function populateMonthSelector() {
+            const select = document.getElementById('month-select');
+            const monthsSet = new Set();
+            const monthsList = [];
+
+            globalBotData.forEach(row => {
+                const d = new Date(parseInt(row.timestamp) * 1000);
+                const monthKey = `${d.getFullYear()}-${d.getMonth()}`;
+                if (!monthsSet.has(monthKey)) {
+                    monthsSet.add(monthKey);
+                    monthsList.push({
+                        year: d.getFullYear(),
+                        month: d.getMonth(),
+                        label: d.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' }).toUpperCase()
+                    });
+                }
+            });
+
+            // Ordenar de más reciente a más antiguo
+            monthsList.sort((a, b) => {
+                if (a.year !== b.year) return b.year - a.year;
+                return b.month - a.month;
+            });
+
+            select.innerHTML = '<option value="all">Todos los Meses</option>';
+            monthsList.forEach((m, index) => {
+                const option = document.createElement('option');
+                option.value = `${m.year}-${m.month}`;
+                option.textContent = m.label;
+                if (index === 0) option.selected = true; // Seleccionar el más reciente por defecto
+                select.appendChild(option);
+            });
+        }
+
+        function renderChart() {
+            if (globalBotData.length === 0) return;
+
+            document.getElementById('loading').style.display = 'none';
+
+            const latestTs = parseInt(globalBotData[globalBotData.length - 1].timestamp);
+            const latestDate = new Date(latestTs * 1000);
+            
+            let filteredData = [];
+            let dateSubtitle = '';
+            let intervalMode = currentViewType === 'annual' ? '24h' : '5min';
+
+            if (currentViewType === 'annual') {
+                intervalMode = document.getElementById('interval-select').value;
+                const selectedMonth = document.getElementById('month-select').value;
+                
+                if (selectedMonth === 'all') {
+                    filteredData = globalBotData;
+                    dateSubtitle = 'TODOS LOS MESES DISPONIBLES';
+                } else {
+                    const [targetYear, targetMonth] = selectedMonth.split('-').map(Number);
+                    filteredData = globalBotData.filter(row => {
+                        const d = new Date(parseInt(row.timestamp) * 1000);
+                        return d.getFullYear() === targetYear && d.getMonth() === targetMonth;
+                    });
+                    const d = new Date(targetYear, targetMonth, 1);
+                    dateSubtitle = d.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' }).toUpperCase();
+                }
+            } else {
+                // Último día
+                const targetYear = latestDate.getFullYear();
+                const targetMonth = latestDate.getMonth();
+                const targetDay = latestDate.getDate();
+                
+                filteredData = globalBotData.filter(row => {
+                    const d = new Date(parseInt(row.timestamp) * 1000);
+                    return d.getFullYear() === targetYear && d.getMonth() === targetMonth && d.getDate() === targetDay;
+                });
+                
+                dateSubtitle = latestDate.toLocaleDateString('es-ES', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }).toUpperCase();
+            }
+
+            document.getElementById('date-subtitle').innerText = dateSubtitle;
+
+            if (filteredData.length === 0) {
+                if(chartInstance) chartInstance.destroy();
+                document.getElementById('kpi-profit').innerText = '--';
+                document.getElementById('kpi-invested').innerText = '--';
+                document.getElementById('kpi-bets').innerText = '--';
+                document.getElementById('kpi-intervals').innerText = '--';
+                return;
+            }
+
+            // Agrupar en franjas
+            let intervalSeconds = 300; // 5 minutos por defecto
+            if (intervalMode === '1h') {
+                intervalSeconds = 60 * 60;
+            } else if (intervalMode === '24h') {
+                intervalSeconds = 24 * 60 * 60;
+            } else if (intervalMode === '48h') {
+                intervalSeconds = 48 * 60 * 60;
+            } else if (intervalMode === 'weekly') {
+                intervalSeconds = 7 * 24 * 60 * 60; // 1 semana
+            }
+
+            const buckets = new Map();
+            let totalPeriodInvested = 0;
+            let totalPeriodBets = 0;
+
+            filteredData.forEach(row => {
+                const ts = parseInt(row.timestamp);
+                let bucketTs = Math.floor(ts / intervalSeconds) * intervalSeconds;
+                
+                // Si es semanal, ajustar al inicio de la semana (Lunes)
+                if (intervalMode === 'weekly') {
+                    const d = new Date(ts * 1000);
+                    const day = d.getDay();
+                    const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Ajustar a Lunes
+                    const startOfWeek = new Date(d.getFullYear(), d.getMonth(), diff);
+                    startOfWeek.setHours(0,0,0,0);
+                    bucketTs = Math.floor(startOfWeek.getTime() / 1000);
+                } else if (intervalMode === '24h' || intervalMode === '48h') {
+                    const d = new Date(ts * 1000);
+                    d.setHours(0,0,0,0);
+                    if (intervalMode === '48h') {
+                        // Agrupar de dos en dos días
+                        const diff = Math.floor(d.getTime() / (24 * 60 * 60 * 1000)) % 2;
+                        d.setDate(d.getDate() - diff);
+                    }
+                    bucketTs = Math.floor(d.getTime() / 1000);
+                }
+                
+                if (!buckets.has(bucketTs)) {
+                    buckets.set(bucketTs, { buys: 0, invested: 0, recovered: 0, netDelta: 0, bets: 0 });
+                }
+                
+                const b = buckets.get(bucketTs);
+                const amt = parseFloat(row.usdcAmount) || 0;
+                const action = row.action;
+
+                if (action === 'Buy') {
+                    b.invested += amt;
+                    b.netDelta -= amt;
+                    b.bets += 1;
+                    totalPeriodInvested += amt;
+                    totalPeriodBets += 1;
+                } else if (action === 'Sell' || action === 'Redeem') {
+                    b.recovered += amt;
+                    b.netDelta += amt;
+                }
+            });
+
+            // Ordenar buckets
+            const sortedBucketKeys = Array.from(buckets.keys()).sort((a, b) => a - b);
+            
+            // Preparar datos para Chart.js
+            const chartData = [];
+            const volumeData = [];
+            const betsData = [];
+            
+            let accumulatedProfit = 0;
+
+            sortedBucketKeys.forEach(ts => {
+                const b = buckets.get(ts);
+                accumulatedProfit += b.netDelta;
+                
+                const dateObj = new Date(ts * 1000);
+
+                chartData.push({ x: dateObj, y: accumulatedProfit });
+                volumeData.push({ x: dateObj, y: b.invested });
+                betsData.push({ x: dateObj, y: b.bets });
+            });
+
+            // Update KPIs
+            const kpiProfitEl = document.getElementById('kpi-profit');
+            kpiProfitEl.innerText = formatMoney(accumulatedProfit);
+            kpiProfitEl.className = `text-lg font-black ${accumulatedProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}`;
+            
+            document.getElementById('kpi-invested').innerText = formatMoney(totalPeriodInvested);
+            document.getElementById('kpi-bets').innerText = totalPeriodBets;
+            
+            const kpiIntervalsLabel = document.getElementById('kpi-intervals').previousElementSibling;
+            if (intervalMode === 'weekly') {
+                kpiIntervalsLabel.innerText = 'Franjas Activas (1 Sem)';
+            } else if (intervalMode === '48h') {
+                kpiIntervalsLabel.innerText = 'Franjas Activas (48h)';
+            } else if (intervalMode === '24h') {
+                kpiIntervalsLabel.innerText = 'Franjas Activas (24h)';
+            } else if (intervalMode === '1h') {
+                kpiIntervalsLabel.innerText = 'Franjas Activas (1h)';
+            } else {
+                kpiIntervalsLabel.innerText = 'Franjas Activas (5m)';
+            }
+            document.getElementById('kpi-intervals').innerText = sortedBucketKeys.length;
+
+            drawChart(chartData, volumeData, betsData, intervalMode);
+        }
+
+        function drawChart(profitData, volumeData, betsData, intervalMode) {
+            if (chartInstance) {
+                chartInstance.destroy();
+            }
+
+            const ctx = document.getElementById('detailedChart').getContext('2d');
+
+            let timeUnit = 'minute';
+            let stepSize = 30;
+            let displayFormat = {
+                minute: 'HH:mm',
+                hour: 'HH:mm',
+                day: 'MMM d'
+            };
+            
+            if (intervalMode === 'weekly') {
+                timeUnit = 'day';
+                stepSize = 7;
+            } else if (intervalMode === '48h') {
+                timeUnit = 'day';
+                stepSize = 2;
+            } else if (intervalMode === '24h') {
+                timeUnit = 'day';
+                stepSize = 1;
+            } else if (intervalMode === '1h') {
+                timeUnit = 'hour';
+                stepSize = 1;
+            }
+
+            chartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    datasets: [
+                        {
+                            label: 'Beneficio Acumulado ($)',
+                            data: profitData,
+                            borderColor: '#60a5fa',
+                            backgroundColor: 'rgba(96, 165, 250, 0.1)',
+                            borderWidth: 2,
+                            fill: true,
+                            yAxisID: 'y',
+                            tension: 0.2,
+                            pointRadius: 1,
+                            pointHoverRadius: 4
+                        },
+                        {
+                            label: 'Dinero Invertido por Franja ($)',
+                            data: volumeData,
+                            type: 'bar',
+                            backgroundColor: 'rgba(244, 114, 182, 0.4)',
+                            borderColor: 'rgba(244, 114, 182, 0.8)',
+                            borderWidth: 1,
+                            yAxisID: 'y1',
+                            barPercentage: 1.0,
+                            categoryPercentage: 1.0,
+                            minBarLength: 2
+                        },
+                        {
+                            label: 'Nº Apuestas por Franja',
+                            data: betsData,
+                            type: 'bar',
+                            backgroundColor: 'rgba(52, 211, 153, 0.4)',
+                            borderColor: 'rgba(52, 211, 153, 0.8)',
+                            borderWidth: 1,
+                            yAxisID: 'y2',
+                            hidden: false,
+                            barPercentage: 0.8,
+                            minBarLength: 2
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: {
+                        mode: 'index',
+                        intersect: false,
+                    },
+                    plugins: {
+                        legend: {
+                            labels: { color: '#cbd5e1', font: { size: 11 } }
+                        },
+                        tooltip: {
+                            backgroundColor: 'rgba(15, 23, 42, 0.9)',
+                            titleColor: '#94a3b8',
+                            bodyColor: '#f1f5f9',
+                            borderColor: '#334155',
+                            borderWidth: 1,
+                            padding: 10,
+                            callbacks: {
+                                label: function(context) {
+                                    let label = context.dataset.label || '';
+                                    if (label) { label += ': '; }
+                                    if (context.datasetIndex === 2) {
+                                        label += context.parsed.y + ' apuestas';
+                                    } else {
+                                        label += formatMoney(context.parsed.y);
+                                    }
+                                    return label;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: {
+                                unit: timeUnit,
+                                stepSize: stepSize,
+                                displayFormats: displayFormat,
+                                tooltipFormat: intervalMode === 'weekly' ? 'dd MMM yyyy' : 'dd MMM yyyy, HH:mm'
+                            },
+                            grid: { color: 'rgba(51, 65, 85, 0.3)' },
+                            ticks: { color: '#94a3b8', maxRotation: 45 }
+                        },
+                        y: {
+                            type: 'linear',
+                            display: true,
+                            position: 'left',
+                            title: { display: true, text: 'Beneficio Acumulado ($)', color: '#60a5fa' },
+                            grid: { color: 'rgba(51, 65, 85, 0.3)' },
+                            ticks: { color: '#94a3b8' }
+                        },
+                        y1: {
+                            type: 'linear',
+                            display: true,
+                            position: 'right',
+                            title: { display: true, text: 'Dinero Invertido ($)', color: '#f472b6' },
+                            grid: { drawOnChartArea: false },
+                            ticks: { color: '#f472b6' },
+                            min: 0
+                        },
+                        y2: {
+                            type: 'linear',
+                            display: false, // Hidden axis just to scale bets properly
+                            position: 'right',
+                            min: 0
+                        }
+                    }
+                }
+            });
+        }
+
+        window.addEventListener('DOMContentLoaded', init);
+    </script>
+</body>
+</html>

@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Detalle de Mercado Fallido</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background-color: #0f172a; color: #e2e8f0; }
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #1f2937; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb { background: #374151; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #4b5563; }
+    </style>
+</head>
+<body class="p-6 max-w-4xl mx-auto min-h-screen flex flex-col">
+    <div class="flex items-center justify-between mb-6 shrink-0">
+        <div class="flex flex-col">
+            <h1 class="text-2xl font-bold text-red-400 flex items-center gap-2 uppercase tracking-wider">
+                <span>🔍</span> Detalle de Pérdida
+            </h1>
+            <span class="text-xs text-slate-400 font-medium tracking-wide mt-1" id="market-name-header">Cargando...</span>
+        </div>
+        <button onclick="window.close()" class="text-sm text-slate-400 hover:text-white transition-colors flex items-center gap-1 bg-slate-800 px-3 py-1.5 rounded border border-slate-700">
+            <span>✖</span> Cerrar Pestaña
+        </button>
+    </div>
+
+    <div id="content" class="flex-1 flex flex-col gap-4">
+        <div class="text-center text-slate-500 py-10">Analizando datos del mercado...</div>
+    </div>
+
+    <script>
+        function formatMoney(value) {
+            return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
+        }
+
+        function formatDate(timestamp) {
+            if (!timestamp) return '--';
+            const date = new Date(timestamp * 1000);
+            return date.toLocaleString('es-ES', { 
+                day: '2-digit', month: '2-digit', year: 'numeric',
+                hour: '2-digit', minute: '2-digit', second: '2-digit'
+            });
+        }
+
+        // --- MANEJO DE ALMACENAMIENTO LOCAL (IndexedDB) ---
+        const dbName = 'PolymarketDB';
+        const storeName = 'csvData';
+
+        function initDB() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(dbName, 1);
+                request.onerror = event => reject("Error abriendo IndexedDB");
+                request.onsuccess = event => resolve(event.target.result);
+            });
+        }
+
+        async function loadData() {
+            try {
+                const db = await initDB();
+                const tx = db.transaction(storeName, 'readonly');
+                const store = tx.objectStore(storeName);
+                const request = store.get('latest_data');
+                return new Promise((resolve, reject) => {
+                    request.onsuccess = () => resolve(request.result ? request.result.rows : null);
+                    request.onerror = () => reject("Error leyendo datos");
+                });
+            } catch (e) {
+                console.error("No se pudo cargar de IndexedDB", e);
+                return null;
+            }
+        }
+
+        function getActiveConfigForTimestamp(ts) {
+            const configs = JSON.parse(localStorage.getItem('botConfigs')) || [];
+            const sortedConfigs = [...configs].sort((a, b) => parseInt(b.id) - parseInt(a.id)); // Más recientes primero
+            const cfg = sortedConfigs.find(c => parseInt(c.id) <= ts);
+            return cfg || { id: 'Desconocida', normal: '--', trasPerdida: '--', numTrasPerdida: '--', salida: '--' };
+        }
+
+        async function init() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const marketName = urlParams.get('market');
+
+            if (!marketName) {
+                document.getElementById('content').innerHTML = '<div class="text-center text-red-400 py-10 font-bold">Error: No se especificó el mercado en la URL.</div>';
+                return;
+            }
+
+            document.getElementById('market-name-header').innerText = marketName;
+
+            const data = await loadData();
+            if (!data || data.length === 0) {
+                document.getElementById('content').innerHTML = '<div class="text-center text-slate-500 py-10">No hay datos disponibles. Sube tus CSV en el Dashboard.</div>';
+                return;
+            }
+
+            // Filtrar transacciones de este mercado y ordenarlas cronológicamente
+            const marketTxs = data.filter(row => row.marketName === marketName)
+                                  .sort((a, b) => parseInt(a.timestamp) - parseInt(b.timestamp));
+
+            if (marketTxs.length === 0) {
+                document.getElementById('content').innerHTML = '<div class="text-center text-slate-500 py-10">No se encontraron transacciones para este mercado.</div>';
+                return;
+            }
+
+            let totalInvested = 0;
+            let totalRecovered = 0;
+            let buyCount = 0;
+            let sellCount = 0;
+            let firstTs = Infinity;
+            let lastTs = 0;
+
+            let txListHTML = '';
+
+            marketTxs.forEach((tx, index) => {
+                const ts = parseInt(tx.timestamp);
+                const amt = parseFloat(tx.usdcAmount) || 0;
+                const action = tx.action;
+                const price = parseFloat(tx.price) || 0;
+                const shares = parseFloat(tx.shares) || 0;
+
+                if (ts < firstTs) firstTs = ts;
+                if (ts > lastTs) lastTs = ts;
+
+                let actionColor = 'text-slate-400';
+                let sign = '';
+                if (action === 'Buy') {
+                    totalInvested += amt;
+                    buyCount++;
+                    actionColor = 'text-red-400';
+                    sign = '-';
+                } else if (action === 'Sell' || action === 'Redeem') {
+                    totalRecovered += amt;
+                    sellCount++;
+                    actionColor = 'text-emerald-400';
+                    sign = '+';
+                }
+
+                txListHTML += `
+                    <div class="flex justify-between items-center p-3 border-b border-slate-700/50 hover:bg-slate-800/30 transition-colors">
+                        <div class="flex items-center gap-3">
+                            <span class="text-[10px] font-mono text-slate-500 w-6">${index + 1}</span>
+                            <div class="flex flex-col">
+                                <span class="text-xs font-bold ${actionColor} uppercase tracking-wider">${action}</span>
+                                <span class="text-[10px] text-slate-400 font-mono mt-0.5">${formatDate(ts)}</span>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-6 text-right">
+                            <div class="flex flex-col items-end hidden md:flex">
+                                <span class="text-[9px] text-slate-500 uppercase">Precio</span>
+                                <span class="text-xs text-slate-300 font-mono">${price > 0 ? '$' + price.toFixed(4) : '--'}</span>
+                            </div>
+                            <div class="flex flex-col items-end hidden md:flex">
+                                <span class="text-[9px] text-slate-500 uppercase">Acciones</span>
+                                <span class="text-xs text-slate-300 font-mono">${shares > 0 ? shares.toFixed(2) : '--'}</span>
+                            </div>
+                            <div class="flex flex-col items-end min-w-[80px]">
+                                <span class="text-[9px] text-slate-500 uppercase">Monto</span>
+                                <span class="text-sm font-bold ${actionColor} font-mono">${sign}${formatMoney(amt)}</span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+
+            const netLoss = totalRecovered - totalInvested;
+            const config = getActiveConfigForTimestamp(firstTs);
+            const durationSecs = lastTs - firstTs;
+            const durationHours = (durationSecs / 3600).toFixed(1);
+
+            let analysisNotes = [];
+            if (buyCount > 5) analysisNotes.push("⚠️ Exceso de recompras (Martingala agresiva).");
+            if (sellCount === 0) analysisNotes.push("🛑 Capital retenido o mercado liquidado en contra sin oportunidad de salida.");
+            if (totalInvested > 100) analysisNotes.push("💸 Alta exposición de capital en un solo mercado.");
+            if (analysisNotes.length === 0) analysisNotes.push("ℹ️ Pérdida estándar dentro de los parámetros esperados.");
+
+            const eventEndTs = Math.ceil(lastTs / 300) * 300;
+            const eventStartTs = eventEndTs - 300;
+            const polymarketUrl = `https://polymarket.com/event/btc-updown-5m-${eventEndTs}`;
+
+            document.getElementById('content').innerHTML = `
+                <!-- Resumen Superior -->
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <div class="bg-[#1e293b] p-3 rounded-xl border border-slate-700 shadow-md">
+                        <span class="text-[9px] text-slate-400 uppercase tracking-wider block mb-1">Invertido</span>
+                        <span class="text-lg font-mono text-slate-200">${formatMoney(totalInvested)}</span>
+                        <div class="text-[9px] text-slate-500 mt-1">${buyCount} compras</div>
+                    </div>
+                    <div class="bg-[#1e293b] p-3 rounded-xl border border-slate-700 shadow-md">
+                        <span class="text-[9px] text-slate-400 uppercase tracking-wider block mb-1">Recuperado</span>
+                        <span class="text-lg font-mono text-slate-200">${formatMoney(totalRecovered)}</span>
+                        <div class="text-[9px] text-slate-500 mt-1">${sellCount} ventas/redeem</div>
+                    </div>
+                    <div class="bg-[#1e293b] p-3 rounded-xl border border-red-900/50 shadow-md col-span-2 md:col-span-1 bg-red-900/10">
+                        <span class="text-[9px] text-red-400/80 uppercase tracking-wider block mb-1">Pérdida Neta</span>
+                        <span class="text-xl font-black text-red-400 drop-shadow-sm">${formatMoney(netLoss)}</span>
+                    </div>
+                    <div class="bg-[#1e293b] p-3 rounded-xl border border-slate-700 shadow-md col-span-2 md:col-span-1 flex flex-col justify-center">
+                        <span class="text-[9px] text-slate-400 uppercase tracking-wider block mb-1">Duración</span>
+                        <span class="text-sm font-bold text-slate-300">${durationHours} horas</span>
+                        <span class="text-[9px] text-slate-500 mt-1">${formatDate(firstTs)}</span>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-2">
+                    <!-- Configuración del Bot -->
+                    <div class="bg-[#1e293b] rounded-xl border border-slate-700 shadow-md flex flex-col md:col-span-1">
+                        <div class="px-3 py-2 border-b border-slate-700 bg-slate-800/50 rounded-t-xl flex justify-between items-center">
+                            <h2 class="text-[10px] font-bold text-teal-400 uppercase tracking-wider flex items-center gap-1.5">
+                                <span>⚙️</span> Config. Bot Activa
+                            </h2>
+                            <span class="text-[8px] bg-slate-900 px-1.5 py-0.5 rounded font-mono border border-slate-600">ID: ${config.id}</span>
+                        </div>
+                        <div class="p-3 grid grid-cols-2 gap-y-3 gap-x-2 text-center flex-1 items-center">
+                            <div class="flex flex-col">
+                                <span class="text-[9px] text-slate-500 uppercase">Apuesta</span>
+                                <span class="text-xs font-bold text-slate-300">${config.normal}</span>
+                            </div>
+                            <div class="flex flex-col">
+                                <span class="text-[9px] text-slate-500 uppercase">Tras Pérdida</span>
+                                <span class="text-xs font-bold text-slate-300">${config.trasPerdida}</span>
+                            </div>
+                            <div class="flex flex-col">
+                                <span class="text-[9px] text-slate-500 uppercase">Max Apuestas</span>
+                                <span class="text-xs font-bold text-slate-300">${config.numTrasPerdida}</span>
+                            </div>
+                            <div class="flex flex-col">
+                                <span class="text-[9px] text-slate-500 uppercase">% Salida</span>
+                                <span class="text-xs font-bold text-slate-300">${config.salida}%</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Diagnóstico de Pérdida -->
+                    <div class="bg-[#1e293b] rounded-xl border border-slate-700 shadow-md flex flex-col md:col-span-2">
+                        <div class="px-3 py-2 border-b border-slate-700 bg-slate-800/50 rounded-t-xl">
+                            <h2 class="text-[10px] font-bold text-orange-400 uppercase tracking-wider flex items-center gap-1.5">
+                                <span>🧠</span> Análisis de Causa
+                            </h2>
+                        </div>
+                        <div class="p-3 flex flex-col justify-center flex-1">
+                            <ul class="space-y-2">
+                                ${analysisNotes.map(note => `<li class="text-xs text-slate-300 bg-slate-800/50 p-2 rounded border border-slate-700/50">${note}</li>`).join('')}
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-[#1e293b] rounded-xl border border-slate-700 shadow-md flex flex-col">
+                    <div class="px-3 py-2 border-b border-slate-700 bg-slate-800/50 rounded-t-xl flex justify-between items-center">
+                        <h2 class="text-[10px] font-bold text-blue-300 uppercase tracking-wider flex items-center gap-1.5">
+                            <span>📈</span> Contexto del Mercado (5m)
+                        </h2>
+                        <a href="${polymarketUrl}" target="_blank" class="text-[9px] text-blue-300 bg-[#0f172a] px-1.5 py-0.5 rounded border border-blue-500/30 hover:text-blue-200 hover:border-blue-400 transition-colors">Ver en Polymarket ↗</a>
+                    </div>
+                    <div id="market-context-body" class="p-3">
+                        <div class="text-center text-slate-500 py-6 text-[10px]">Cargando precios BTC del intervalo...</div>
+                    </div>
+                </div>
+
+                <!-- Historial de Transacciones -->
+                <div class="bg-[#1e293b] rounded-xl border border-slate-700 shadow-md flex flex-col flex-1 mt-2 min-h-[300px]">
+                    <div class="px-3 py-2 border-b border-slate-700 bg-slate-800/50 rounded-t-xl flex justify-between items-center">
+                        <h2 class="text-[10px] font-bold text-blue-400 uppercase tracking-wider flex items-center gap-1.5">
+                            <span>📜</span> Desglose de Transacciones
+                        </h2>
+                        <span class="text-[9px] text-slate-400">${marketTxs.length} operaciones</span>
+                    </div>
+                    <div class="flex-1 overflow-y-auto custom-scrollbar p-1">
+                        ${txListHTML}
+                    </div>
+                </div>
+            `;
+
+            try {
+                const url = `https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&startTime=${eventStartTs * 1000}&endTime=${eventEndTs * 1000}`;
+                const res = await fetch(url);
+                const klines = await res.json();
+                if (!Array.isArray(klines) || klines.length === 0) {
+                    document.getElementById('market-context-body').innerHTML = `<div class="text-center text-slate-500 py-6 text-[10px]">Sin datos de precio disponibles para el intervalo.</div>`;
+                    return;
+                }
+                const points = klines.map(k => ({
+                    openTime: k[0],
+                    open: parseFloat(k[1]),
+                    high: parseFloat(k[2]),
+                    low: parseFloat(k[3]),
+                    close: parseFloat(k[4]),
+                    closeTime: k[6]
+                }));
+                const startPrice = points[0].open;
+                const endPrice = points[points.length - 1].close;
+                const maxHigh = Math.max(...points.map(p => p.high));
+                const minLow = Math.min(...points.map(p => p.low));
+                const change = endPrice - startPrice;
+                const changePct = (change / startPrice) * 100;
+                const resultText = endPrice >= startPrice ? 'Up' : 'Down';
+                const range = maxHigh - minLow;
+                const volSimple = (range / startPrice) * 100;
+                const rows = points.map(p => `
+                    <tr class="border-b border-slate-700/50">
+                        <td class="px-2 py-1 text-[10px] text-slate-400 font-mono">${new Date(p.openTime).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}</td>
+                        <td class="px-2 py-1 text-[10px] text-slate-300 font-mono">$${p.open.toFixed(2)}</td>
+                        <td class="px-2 py-1 text-[10px] text-slate-300 font-mono">$${p.high.toFixed(2)}</td>
+                        <td class="px-2 py-1 text-[10px] text-slate-300 font-mono">$${p.low.toFixed(2)}</td>
+                        <td class="px-2 py-1 text-[10px] font-mono ${p.close >= p.open ? 'text-emerald-400' : 'text-red-400'}">$${p.close.toFixed(2)}</td>
+                    </tr>
+                `).join('');
+                document.getElementById('market-context-body').innerHTML = `
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+                        <div class="bg-[#0f172a] p-2 rounded border border-slate-700">
+                            <div class="text-[9px] text-slate-500 uppercase tracking-wider">Inicio</div>
+                            <div class="text-[10px] font-mono text-slate-300">${formatDate(eventStartTs)}</div>
+                        </div>
+                        <div class="bg-[#0f172a] p-2 rounded border border-slate-700">
+                            <div class="text-[9px] text-slate-500 uppercase tracking-wider">Fin</div>
+                            <div class="text-[10px] font-mono text-slate-300">${formatDate(eventEndTs)}</div>
+                        </div>
+                        <div class="bg-[#0f172a] p-2 rounded border border-slate-700">
+                            <div class="text-[9px] text-slate-500 uppercase tracking-wider">Resultado</div>
+                            <div class="text-[10px] font-bold ${endPrice >= startPrice ? 'text-emerald-400' : 'text-red-400'}">${resultText}</div>
+                        </div>
+                        <div class="bg-[#0f172a] p-2 rounded border border-slate-700">
+                            <div class="text-[9px] text-slate-500 uppercase tracking-wider">Variación</div>
+                            <div class="text-[10px] font-bold ${change >= 0 ? 'text-emerald-400' : 'text-red-400'}">$${change.toFixed(2)} (${changePct.toFixed(2)}%)</div>
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+                        <div class="bg-[#0f172a] p-2 rounded border border-slate-700">
+                            <div class="text-[9px] text-slate-500 uppercase tracking-wider">Máximo</div>
+                            <div class="text-[10px] font-mono text-slate-300">$${maxHigh.toFixed(2)}</div>
+                        </div>
+                        <div class="bg-[#0f172a] p-2 rounded border border-slate-700">
+                            <div class="text-[9px] text-slate-500 uppercase tracking-wider">Mínimo</div>
+                            <div class="text-[10px] font-mono text-slate-300">$${minLow.toFixed(2)}</div>
+                        </div>
+                        <div class="bg-[#0f172a] p-2 rounded border border-slate-700">
+                            <div class="text-[9px] text-slate-500 uppercase tracking-wider">Rango</div>
+                            <div class="text-[10px] font-mono text-slate-300">$${range.toFixed(2)}</div>
+                        </div>
+                        <div class="bg-[#0f172a] p-2 rounded border border-slate-700">
+                            <div class="text-[9px] text-slate-500 uppercase tracking-wider">Volatilidad</div>
+                            <div class="text-[10px] font-bold text-slate-300">${volSimple.toFixed(2)}%</div>
+                        </div>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full text-left border border-slate-700 rounded">
+                            <thead class="bg-slate-800/50">
+                                <tr>
+                                    <th class="px-2 py-1 text-[9px] text-slate-400 uppercase">Minuto</th>
+                                    <th class="px-2 py-1 text-[9px] text-slate-400 uppercase">Open</th>
+                                    <th class="px-2 py-1 text-[9px] text-slate-400 uppercase">High</th>
+                                    <th class="px-2 py-1 text-[9px] text-slate-400 uppercase">Low</th>
+                                    <th class="px-2 py-1 text-[9px] text-slate-400 uppercase">Close</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${rows}
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="text-[9px] text-slate-500 mt-2">Fuente de precios aproximada: BTCUSDT (1m) en Binance.</div>
+                `;
+            } catch (e) {
+                document.getElementById('market-context-body').innerHTML = `<div class="text-center text-red-400 py-6 text-[10px]">No fue posible obtener datos del mercado.</div>`;
+            }
+        }
+
+        init();
+    </script>
+</body>
+</html>

@@ -1,0 +1,1966 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Polymarket Bot Dashboard</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- PapaParse -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.2/papaparse.min.js"></script>
+    <!-- html2canvas -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="icon" type="image/x-icon" href="profile-image-5936167-467b5244-f7ba-4793-b3ab-9da426f18e60.ico">
+    <script>
+        // Variables for tab title updating
+        window.currentAvailableBalance = 0;
+        window.lastOperationTimestamp = 0;
+
+        function updateTabTitle() {
+            let lastOp = window.lastOperationTimestamp;
+            let availBal = window.currentAvailableBalance;
+            
+            // Si no están en window (ej: recién cargado sin analizar CSV), intentar recuperar de localStorage
+            if (!lastOp) lastOp = parseInt(localStorage.getItem('cachedLastOperationTs'));
+            if (!availBal && availBal !== 0) availBal = parseFloat(localStorage.getItem('cachedAvailableBalance'));
+
+            if (!lastOp || isNaN(lastOp)) return;
+            if (availBal === undefined || isNaN(availBal)) return;
+
+            const now = Math.floor(Date.now() / 1000);
+            const elapsed = now - lastOp;
+            
+            const d = Math.floor(elapsed / (3600*24));
+            const h = Math.floor((elapsed % (3600*24)) / 3600);
+            const m = Math.floor((elapsed % 3600) / 60);
+            const s = elapsed % 60;
+            
+            let timeStr = '';
+            if (d > 0) timeStr += `${d}d `;
+            
+            // Siempre mostrar hh:mm:ss o similar si hay horas/minutos, o al menos mm:ss
+            const hh = String(h).padStart(2, '0');
+            const mm = String(m).padStart(2, '0');
+            const ss = String(s).padStart(2, '0');
+            
+            if (d > 0 || h > 0) {
+                timeStr += `${hh}:${mm}:${ss}`;
+            } else {
+                timeStr += `${mm}:${ss}`;
+            }
+
+            const balanceStr = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(availBal);
+            document.title = `${balanceStr} | ${timeStr}`;
+        }
+
+        setInterval(updateTabTitle, 1000); // Update every second
+    </script>
+    <style>
+        /* Ocultar scrollbar pero permitir scroll interno en paneles si es estrictamente necesario */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #1f2937; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #374151; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #4b5563; 
+        }
+        
+    </style>
+</head>
+<body class="bg-[#0f172a] text-slate-200 font-sans h-screen w-screen overflow-hidden flex flex-col text-sm selection:bg-indigo-500/30">
+    <style>
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(51, 65, 85, 0.8); border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(71, 85, 105, 1); }
+    </style>
+    
+    <!-- Pantalla de Carga -->
+    <div id="loading" class="hidden fixed inset-0 bg-[#0f172a]/95 flex flex-col items-center justify-center z-50 backdrop-blur-sm">
+        <div class="text-6xl animate-bounce mb-4">🤖</div>
+        <h2 class="text-xl font-bold text-indigo-400 mb-2">Procesando Datos</h2>
+        <p class="text-slate-400 text-sm">Analizando historial de Polymarket...</p>
+    </div>
+
+    <!-- HEADER -->
+        <header class="bg-[#1e293b] border-b border-slate-700 flex flex-col md:flex-row items-center justify-between px-4 py-2 md:py-0 shrink-0 shadow-md z-30 relative md:h-14">
+        <div class="flex items-center justify-between w-full md:w-auto gap-3">
+            <div class="flex items-center gap-3">
+                <div class="cursor-pointer hover:opacity-80 transition-opacity flex items-center justify-center min-w-[44px] min-h-[44px]" onclick="resetBalanceCalibration()" title="Click para Recalibrar Saldos">
+                    <img src="profile-image-5936167-467b5244-f7ba-4793-b3ab-9da426f18e60.webp" alt="Bot Logo" class="w-11 h-11 md:w-11 md:h-11 rounded-full border border-indigo-500/50 shadow-sm object-cover">
+                </div>
+                <div class="flex flex-col border-r border-slate-600 pr-3 pl-2 justify-center min-h-[44px]">
+                    <span class="text-[11px] md:text-[8px] text-slate-400 font-bold uppercase tracking-wider leading-tight" title="Dinero Total">Portfolio</span>
+                    <span class="text-[16px] md:text-[12px] font-black text-indigo-400 tracking-wide leading-tight" id="portfolio-balance">--</span>
+                </div>
+                <div class="flex flex-col md:border-r border-slate-600 pr-3 cursor-pointer hover:opacity-80 transition-opacity justify-center min-h-[44px]" onclick="window.open('liquidez-historial.html', '_blank')" title="Ver Historial de Liquidez">
+                    <span class="text-[11px] md:text-[8px] text-slate-400 font-bold uppercase tracking-wider flex items-center gap-1 leading-tight">Available <span class="text-[14px] md:text-[10px] leading-none text-emerald-400/70">↗</span></span>
+                    <span class="text-[16px] md:text-[12px] font-black text-emerald-400 tracking-wide leading-tight" id="available-balance">--</span>
+                </div>
+            </div>
+            
+            <button id="hamburger-btn" class="md:hidden flex flex-col justify-center items-center w-11 h-11 bg-slate-700/50 rounded border border-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                <span class="w-6 h-0.5 bg-slate-200 mb-1.5 transition-transform duration-300 origin-center" id="bar1"></span>
+                <span class="w-6 h-0.5 bg-slate-200 mb-1.5 transition-opacity duration-300" id="bar2"></span>
+                <span class="w-6 h-0.5 bg-slate-200 transition-transform duration-300 origin-center" id="bar3"></span>
+            </button>
+        </div>
+
+        <div id="nav-menu" class="hidden md:flex flex-col md:flex-row items-stretch md:items-center gap-0 md:gap-4 w-full md:w-auto bg-[#1e293b] md:bg-transparent absolute md:static top-full left-0 border-b border-slate-700 md:border-none shadow-xl md:shadow-none z-20">
+            <div class="flex flex-wrap md:flex-nowrap items-center justify-between md:justify-start gap-4 md:gap-3 border-b md:border-b-0 md:border-r border-slate-700 md:border-slate-600 px-4 py-4 md:px-0 md:py-0 md:pr-4">
+                <div class="flex flex-col items-center">
+                    <span class="text-[11px] md:text-[8px] text-slate-400 uppercase tracking-wider font-bold">Apuesta</span>
+                    <span class="text-[14px] md:text-[10px] font-bold text-teal-400 leading-tight" id="cfg-normal">--</span>
+                </div>
+                <div class="flex flex-col items-center">
+                    <span class="text-[11px] md:text-[8px] text-slate-400 uppercase tracking-wider font-bold">Tras Perd.</span>
+                    <span class="text-[14px] md:text-[10px] font-bold text-teal-400 leading-tight" id="cfg-tras-perdida">--</span>
+                </div>
+                <div class="flex flex-col items-center">
+                    <span class="text-[11px] md:text-[8px] text-slate-400 uppercase tracking-wider font-bold"># Apuestas</span>
+                    <span class="text-[14px] md:text-[10px] font-bold text-teal-400 leading-tight" id="cfg-num-perdida">--</span>
+                </div>
+                <div class="flex flex-col items-center">
+                    <span class="text-[11px] md:text-[8px] text-slate-400 uppercase tracking-wider font-bold">% Salida</span>
+                    <span class="text-[14px] md:text-[10px] font-bold text-teal-400 leading-tight" id="cfg-salida">--</span>
+                </div>
+                <div class="flex flex-col items-center">
+                    <span class="text-[11px] md:text-[8px] text-slate-400 uppercase tracking-wider font-bold">Desde</span>
+                    <div class="flex flex-col items-center leading-none">
+                        <span class="text-[14px] md:text-[10px] font-mono font-bold text-slate-300" id="cfg-desde">--</span>
+                        <span class="text-[11px] md:text-[7px] text-slate-500 font-medium tracking-wide mt-0.5" id="cfg-desde-fecha">--</span>
+                    </div>
+                </div>
+                <a href="configuraciones.html" target="_blank" class="flex items-center justify-center w-11 h-11 md:w-auto md:h-auto md:ml-1 text-[16px] md:text-[8px] bg-teal-500/10 text-teal-400 hover:bg-teal-500/20 md:px-2 md:py-1 rounded border border-teal-500/30 transition-colors font-bold uppercase" title="Ajustes de Configuración">⚙️</a>
+            </div>
+
+            <div id="ping-indicator" class="flex items-center justify-between md:justify-center gap-2 border-b md:border-b-0 md:border-r border-slate-700 md:border-slate-600 px-4 py-3 md:px-0 md:py-0 md:pr-4 h-auto md:h-8" title="Latencia de conexión">
+                <span class="text-[13px] md:hidden text-slate-400 font-bold uppercase tracking-wider">Latencia</span>
+                <div class="flex items-center gap-1.5">
+                    <span class="w-2 h-2 md:w-1.5 md:h-1.5 rounded-full bg-slate-500 animate-pulse"></span>
+                    <span class="text-[13px] md:text-[10px] font-bold text-slate-400 font-mono">-- ms</span>
+                </div>
+            </div>
+
+            <div id="last-update" class="hidden flex items-center justify-between md:flex-col md:items-end md:justify-center border-b md:border-b-0 md:border-r border-slate-700 md:border-slate-600 px-4 py-3 md:px-0 md:py-0 md:pr-4 h-auto md:h-8">
+                <span class="text-[13px] md:text-[8px] text-slate-400 uppercase tracking-wider font-bold">Última Operación</span>
+                <span id="last-update-time" class="text-[14px] md:text-[10px] font-bold text-blue-300 leading-tight">--</span>
+            </div>
+            
+            <div id="data-counter" class="hidden flex items-center justify-between md:justify-start gap-3 border-b md:border-b-0 md:border-r border-slate-700 md:border-slate-600 px-4 py-3 md:px-0 md:py-0 md:pr-4 h-auto md:h-8">
+                <div class="flex flex-col md:items-end justify-center">
+                    <span class="text-[13px] md:text-[8px] text-slate-400 uppercase tracking-wider font-bold">Base de Datos</span>
+                    <span class="text-[14px] md:text-[10px] font-bold text-slate-200 leading-tight"><span id="total-rows">0</span> registros</span>
+                </div>
+                <button id="clear-data-btn" onclick="handleClearData()" class="flex items-center justify-center w-11 h-11 md:w-auto md:h-auto bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-400 md:p-1 rounded transition-colors" title="Purgar Base de Datos">
+                    <span class="text-xl md:text-xs leading-none">🗑️</span>
+                </button>
+            </div>
+
+            <div class="flex flex-col md:flex-row items-stretch md:items-center justify-around md:justify-start gap-3 px-4 py-4 md:px-0 md:py-0">
+                <input type="file" id="fileInput" accept=".csv" class="hidden" multiple />
+                <button onclick="document.getElementById('fileInput').click()" class="flex flex-1 md:flex-none items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white min-h-[44px] md:min-h-0 md:px-2 md:py-1.5 rounded-md text-[13px] md:text-[10px] font-bold uppercase tracking-wider transition-colors border border-indigo-500 shadow-lg shadow-indigo-900/20" title="Cargar CSV">
+                    <span class="text-xl md:text-sm leading-none">📁</span>
+                    <span class="md:hidden">Cargar CSV</span>
+                </button>
+                <button onclick="downloadDashboard()" class="flex flex-1 md:flex-none items-center justify-center gap-2 bg-slate-700 hover:bg-slate-600 text-slate-200 min-h-[44px] md:min-h-0 md:px-2 md:py-1.5 rounded-md text-[13px] md:text-[10px] font-bold uppercase tracking-wider transition-colors border border-slate-600 shadow-lg" title="Exportar Dashboard">
+                    <span class="text-xl md:text-sm leading-none">📸</span>
+                    <span class="md:hidden">Exportar</span>
+                </button>
+                <button onclick="window.open('historial-operaciones.html','_blank')" class="flex flex-1 md:flex-none items-center justify-center gap-2 bg-slate-700 hover:bg-slate-600 text-slate-200 min-h-[44px] md:min-h-0 md:px-2 md:py-1.5 rounded-md text-[13px] md:text-[10px] font-bold uppercase tracking-wider transition-colors border border-slate-600 shadow-lg" title="Historial de Operaciones">
+                    <span class="text-xl md:text-sm leading-none">⏱️</span>
+                    <span class="md:hidden">Historial</span>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- DASHBOARD GRID -->
+    <div class="md:hidden bg-[#1e293b] border-b border-slate-700 px-3 py-2 flex items-center gap-2">
+        <button onclick="document.getElementById('fileInput').click()" class="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-2 rounded-md text-[12px] font-bold uppercase tracking-wider border border-indigo-500 flex items-center gap-1.5 shadow-lg shadow-indigo-900/20">
+            <span class="text-base leading-none">📁</span>
+        </button>
+        <button onclick="downloadDashboard()" class="bg-slate-700 hover:bg-slate-600 text-slate-200 px-3 py-2 rounded-md text-[12px] font-bold uppercase tracking-wider border border-slate-600 flex items-center gap-1.5 shadow-lg">
+            <span class="text-base leading-none">📸</span>
+        </button>
+        <button onclick="window.open('historial-operaciones.html','_blank')" class="bg-slate-700 hover:bg-slate-600 text-slate-200 px-3 py-2 rounded-md text-[12px] font-bold uppercase tracking-wider border border-slate-600 flex items-center gap-1.5 shadow-lg">
+            <span class="text-base leading-none">⏱️</span>
+        </button>
+    </div>
+    <main class="flex-1 flex flex-col md:grid md:grid-cols-12 gap-6 md:gap-3 p-4 md:p-3 bg-[#0f172a] overflow-y-auto md:overflow-hidden min-h-0 pb-28 md:pb-3 w-full">
+        
+        <!-- PANEL 1: CORE BOT -->
+        <section id="core-bot" class="w-full md:col-span-3 flex flex-col gap-4 md:gap-3 min-h-0 shrink-0 md:shrink">
+            <div class="bg-[#1e293b] rounded-xl border border-slate-700 flex flex-col shrink-0 shadow-lg">
+                <div class="px-4 py-3 md:px-3 md:py-2 border-b border-slate-700 flex justify-between items-center bg-slate-800/50 rounded-t-xl">
+                    <h2 class="text-[14px] md:text-[10px] font-bold text-indigo-400 uppercase tracking-wider flex items-center gap-1.5">
+                        <span class="leading-none text-lg md:text-base">⚡</span> Core Bot
+                    </h2>
+                    <div class="flex flex-col items-end leading-none">
+                        <span class="text-[12px] md:text-[8px] bg-indigo-500/10 px-2 py-1 md:px-1.5 md:py-0.5 border border-indigo-500/20 text-indigo-300 px-1.5 py-0.5 rounded font-mono" id="core-bot-id">ID: --</span>
+                        <span class="text-[10px] md:text-[7px] mt-1 md:mt-0.5 text-slate-500 font-medium tracking-wide mt-0.5 px-0.5" id="core-bot-date">--</span>
+                    </div>
+                </div>
+                <div id="bot-metrics" class="p-2.5 grid grid-cols-2 gap-2">
+                    <div class="text-slate-500 text-[10px] text-center col-span-2 py-6">Esperando datos...</div>
+                </div>
+            </div>
+
+            <div class="bg-[#1e293b] rounded-xl border border-slate-700 flex flex-col flex-1 min-h-0 shadow-lg">
+                <div class="px-4 py-3 md:px-3 md:py-2 border-b border-slate-700 bg-slate-800/50 rounded-t-xl shrink-0">
+                    <h2 class="text-[14px] md:text-[10px] font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
+                        <span class="leading-none text-lg md:text-base">🚀</span> Proyecciones
+                    </h2>
+                </div>
+                <div id="projections-content" class="p-2.5 flex-1 flex flex-col min-h-0 overflow-y-auto custom-scrollbar">
+                     <div class="text-slate-500 text-center text-[10px] m-auto">Sin datos suficientes</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- PANEL 2: AUDITORÍA DE RIESGO -->
+        <section id="auditoria" class="w-full md:col-span-4 flex flex-col gap-4 md:gap-3 min-h-0 shrink-0 md:shrink">
+            <div class="bg-[#1e293b] rounded-xl border border-slate-700 flex flex-col shrink-0 shadow-lg">
+                <div class="px-4 py-3 md:px-3 md:py-2 border-b border-slate-700 bg-slate-800/50 rounded-t-xl shrink-0 flex justify-between items-center">
+                    <h2 class="text-[14px] md:text-[10px] font-bold text-orange-400 uppercase tracking-wider flex items-center gap-1.5">
+                        <span class="leading-none text-lg md:text-base">🕵️</span> Auditor Experto
+                    </h2>
+                    <span id="loss-free-counter" class="text-[12px] md:text-[8px] text-slate-500 font-mono tracking-wider" title="Tiempo transcurrido desde la última pérdida del bot">--</span>
+                </div>
+                <div id="expert-analysis" class="p-3 flex flex-col overflow-auto md:overflow-hidden">
+                     <div class="text-slate-500 text-center text-[10px] m-auto">Esperando ejecución del bot...</div>
+                </div>
+            </div>
+
+            <div class="bg-[#1e293b] rounded-xl border border-slate-700 flex flex-col flex-1 min-h-0 shadow-lg relative">
+                <div class="px-4 py-3 md:px-3 md:py-2 border-b border-slate-700 bg-slate-800/50 rounded-t-xl shrink-0 flex justify-between items-center">
+                    <button onclick="toggleChart()" class="text-slate-400 hover:text-white flex items-center justify-center min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 md:px-2 md:py-0.5 text-lg md:text-xs bg-[#0f172a] rounded border border-slate-600 shadow-sm transition-colors text-xs">&larr;</button>
+                    <h2 id="chartTitle" onclick="openDetailedChart()" class="text-[14px] md:text-[10px] min-h-[44px] md:min-h-0 text-center flex-1 justify-center font-bold text-blue-400 uppercase tracking-wider flex items-center gap-1.5 transition-colors cursor-pointer hover:opacity-80 group" title="Ver análisis temporal detallado">
+                        <span class="leading-none text-lg md:text-base" id="chartIcon">📊</span> <span id="chartName">Beneficio Acumulado Diario</span>
+                        <span class="opacity-0 group-hover:opacity-100 transition-opacity ml-1">↗</span>
+                    </h2>
+                    <button onclick="toggleChart()" class="text-slate-400 hover:text-white flex items-center justify-center min-w-[44px] min-h-[44px] md:min-w-0 md:min-h-0 md:px-2 md:py-0.5 text-lg md:text-xs bg-[#0f172a] rounded border border-slate-600 shadow-sm transition-colors text-xs">&rarr;</button>
+                </div>
+                <div id="chartLegend" class="px-4 py-3 md:px-3 md:py-1.5 text-[12px] md:text-[9px] flex flex-wrap gap-3 justify-center bg-[#0f172a] border-b border-slate-700/50 text-[9px] empty:hidden shrink-0"></div>
+                <div id="dailyChartContainer" class="p-3 flex-1 flex flex-col min-h-0 relative pt-8">
+                    <div id="dailyChartDate" class="absolute top-2 left-0 right-0 text-center text-[12px] md:text-[10px] font-bold text-slate-300 z-10 bg-[#1e293b]/80 py-1 mx-4 rounded">--</div>
+                    <canvas id="dailyChart" class="w-full h-full"></canvas>
+                </div>
+                <div id="annualChartContainer" class="p-3 flex-1 flex flex-col min-h-0 relative hidden">
+                    <canvas id="projectionChart" class="w-full h-full"></canvas>
+                </div>
+                <div id="perDayChartContainer" class="p-3 flex-1 flex flex-col min-h-0 relative hidden">
+                    <canvas id="perDayChart" class="w-full h-full"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <!-- PANEL 3: HISTORIAL GLOBAL -->
+        <section id="historial-global" class="w-full md:col-span-5 flex flex-col min-h-0 shrink-0 md:shrink">
+            <div class="bg-[#1e293b] rounded-xl border border-slate-700 flex flex-col flex-1 min-h-0 shadow-lg">
+                 <div class="px-4 py-3 md:px-3 md:py-2 border-b border-slate-700 bg-slate-800/50 rounded-t-xl shrink-0 flex justify-between items-center">
+                    <h2 class="text-[14px] md:text-[10px] font-bold text-blue-400 uppercase tracking-wider flex items-center gap-1.5">
+                        <span class="leading-none text-lg md:text-base">🌍</span> Historial Global
+                    </h2>
+                    <span class="text-[12px] md:text-[8px] text-slate-400 uppercase tracking-wider">Manual + Bot</span>
+                </div>
+                <div id="results" class="p-4 md:p-3 grid grid-cols-1 md:grid-cols-2 grid-rows-2 gap-4 flex-1 min-h-0 overflow-auto md:overflow-hidden">
+                    <div class="text-slate-500 text-center text-[10px] col-span-2 row-span-2 m-auto flex flex-col items-center gap-2">
+                        <span class="text-3xl">👆</span>
+                        Sube tu archivo CSV para poblar el BI
+                    </div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+    <div class="md:hidden fixed bottom-0 left-0 right-0 bg-[#1e293b] border-t border-slate-700 px-4 py-2 flex justify-around items-center z-20">
+        <button onclick="document.getElementById('core-bot').scrollIntoView({behavior:'smooth'})" class="text-slate-200 flex flex-col items-center text-[11px]">
+            <span class="text-lg">⚡</span>
+            <span>Bot</span>
+        </button>
+        <button onclick="document.getElementById('auditoria').scrollIntoView({behavior:'smooth'})" class="text-slate-200 flex flex-col items-center text-[11px]">
+            <span class="text-lg">🕵️</span>
+            <span>Riesgo</span>
+        </button>
+        <button onclick="document.getElementById('historial-global').scrollIntoView({behavior:'smooth'})" class="text-slate-200 flex flex-col items-center text-[11px]">
+            <span class="text-lg">🌍</span>
+            <span>Historial</span>
+        </button>
+        <a href="perdidas.html" target="_blank" class="text-slate-200 flex flex-col items-center text-[11px]">
+            <span class="text-lg">💥</span>
+            <span>Pérdidas</span>
+        </a>
+    </div>
+
+    <script>
+        // Tasa de conversión (Aproximada, se puede ajustar)
+        
+        // Hamburger menu toggle
+        document.addEventListener('DOMContentLoaded', () => {
+            const btn = document.getElementById('hamburger-btn');
+            const menu = document.getElementById('nav-menu');
+            const bar1 = document.getElementById('bar1');
+            const bar2 = document.getElementById('bar2');
+            const bar3 = document.getElementById('bar3');
+
+            if(btn && menu) {
+                btn.addEventListener('click', () => {
+                    menu.classList.toggle('hidden');
+                    menu.classList.toggle('flex');
+                    bar1.classList.toggle('translate-y-2');
+                    bar1.classList.toggle('rotate-45');
+                    bar2.classList.toggle('opacity-0');
+                    bar3.classList.toggle('-translate-y-2');
+                    bar3.classList.toggle('-rotate-45');
+                });
+            }
+        });
+
+        const EUR_RATE = 0.92; // 1 USD = 0.92 EUR
+
+        function formatMoney(usd) {
+            const eur = usd * EUR_RATE;
+            const sign = usd > 0 ? '+' : (usd < 0 ? '-' : '');
+            return `<div>${sign}$${Math.abs(usd).toFixed(2)}</div><div class="text-[8px] opacity-70 font-normal leading-none mt-0.5">${sign}€${Math.abs(eur).toFixed(2)}</div>`;
+        }
+
+        // --- MANEJO DE ALMACENAMIENTO LOCAL (IndexedDB a través de localStorage simplificado o directamente localStorage) ---
+        // Como los CSV pueden ser grandes, localStorage (límite ~5MB) podría quedarse corto a futuro.
+        // Usaremos IndexedDB para mayor robustez usando promesas simples.
+        const dbName = 'PolymarketDB';
+        const storeName = 'csvData';
+
+        function initDB() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(dbName, 1);
+                request.onerror = event => reject("Error abriendo IndexedDB");
+                request.onsuccess = event => resolve(event.target.result);
+                request.onupgradeneeded = event => {
+                    const db = event.target.result;
+                    if (!db.objectStoreNames.contains(storeName)) {
+                        db.createObjectStore(storeName, { keyPath: 'id' });
+                    }
+                };
+            });
+        }
+
+        async function saveData(data) {
+            try {
+                const db = await initDB();
+                const tx = db.transaction(storeName, 'readwrite');
+                const store = tx.objectStore(storeName);
+                // Guardamos todo el array bajo un único ID para cargarlo fácil
+                store.put({ id: 'latest_data', rows: data });
+                return new Promise(resolve => tx.oncomplete = () => resolve());
+            } catch (e) {
+                console.error("No se pudo guardar en IndexedDB", e);
+            }
+        }
+
+        async function loadData() {
+            try {
+                const db = await initDB();
+                const tx = db.transaction(storeName, 'readonly');
+                const store = tx.objectStore(storeName);
+                const request = store.get('latest_data');
+                return new Promise((resolve, reject) => {
+                    request.onsuccess = () => resolve(request.result ? request.result.rows : null);
+                    request.onerror = () => reject("Error leyendo datos");
+                });
+            } catch (e) {
+                console.error("No se pudo cargar de IndexedDB", e);
+                return null;
+            }
+        }
+
+        async function clearData() {
+            try {
+                const db = await initDB();
+                const tx = db.transaction(storeName, 'readwrite');
+                tx.objectStore(storeName).delete('latest_data');
+            } catch (e) {
+                console.error("Error borrando datos", e);
+            }
+        }
+
+        async function handleClearData() {
+            if (confirm("¿Estás seguro de que quieres borrar todos los datos guardados en el navegador? Tendrás que volver a subir los CSV.")) {
+                await clearData();
+                location.reload();
+            }
+        }
+
+        // --- MEDIDOR DE LATENCIA (PING) ---
+        function measureLatency() {
+            const start = performance.now();
+            // Hacemos una petición ligera a Cloudflare DNS (muy estable y rápido) para estimar latencia
+            fetch('https://1.1.1.1/cdn-cgi/trace?t=' + Date.now(), { mode: 'no-cors', cache: 'no-store' })
+                .then(() => {
+                    const latency = Math.round(performance.now() - start);
+                    updateLatencyUI(latency);
+                })
+                .catch(() => {
+                    updateLatencyUI(-1);
+                });
+        }
+
+        function updateLatencyUI(latency) {
+            const pingEl = document.getElementById('ping-indicator');
+            if (!pingEl) return;
+            
+            if (latency === -1) {
+                pingEl.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-red-500"></span><span class="text-[10px] font-bold text-red-400 font-mono">Offline</span>`;
+            } else {
+                let color = 'text-emerald-400';
+                let dot = 'bg-emerald-500';
+                if (latency > 150) { color = 'text-yellow-400'; dot = 'bg-yellow-500'; }
+                if (latency > 300) { color = 'text-red-400'; dot = 'bg-red-500'; }
+                
+                pingEl.innerHTML = `<span class="w-1.5 h-1.5 rounded-full ${dot} shadow-[0_0_5px_${dot}]"></span><span class="text-[10px] font-bold ${color} font-mono">${latency} ms</span>`;
+            }
+        }
+
+        // Medir latencia cada 5 segundos
+        setInterval(measureLatency, 5000);
+
+        // Cargar datos al iniciar la página
+        window.addEventListener('DOMContentLoaded', async () => {
+            measureLatency(); // Primera medición de latencia
+            
+            const savedData = await loadData();
+            if (savedData && savedData.length > 0) {
+                document.getElementById('data-counter').classList.remove('hidden');
+                document.getElementById('total-rows').innerText = savedData.length.toLocaleString();
+                // Mostrar botón para limpiar datos
+                document.getElementById('clear-data-btn').classList.remove('hidden');
+                
+                // Limpiar el intervalo anterior si existe
+                if (refreshInterval) clearInterval(refreshInterval);
+                
+                analyzeData(savedData);
+                
+                // Configurar el refresco automático cada segundo
+                startRefreshInterval();
+            }
+        });
+
+        let refreshInterval = null;
+
+        function startRefreshInterval() {
+            if (refreshInterval) clearInterval(refreshInterval);
+            refreshInterval = setInterval(() => {
+                if (typeof updateTabTitle === 'function') updateTabTitle();
+                if (window.bot_min_ts && window.bot_min_ts !== Infinity) {
+                    const now_ts = Math.floor(Date.now() / 1000);
+                    const bot_elapsed = now_ts - window.bot_min_ts;
+                    const el = document.getElementById('bot-elapsed-time');
+                    if (el) el.innerText = formatTimeElapsed(bot_elapsed);
+                    
+                    const lossFreeEl = document.getElementById('loss-free-counter');
+                    if (lossFreeEl) {
+                        let seconds_since_loss = bot_elapsed;
+                        if (window.last_loss_ts) {
+                            seconds_since_loss = now_ts - window.last_loss_ts;
+                        }
+                        if (seconds_since_loss > 0) {
+                            lossFreeEl.innerText = formatTimeElapsed(seconds_since_loss) + ' sin pérdidas';
+                        }
+                    }
+                    
+                    // Actualizar proyecciones en tiempo real
+                    const projAvgEl = document.getElementById('proj-daily-avg');
+                    if (projAvgEl && window.bot_net !== undefined) {
+                        const elapsedDays = bot_elapsed / 86400;
+                        const dailyAvg = window.bot_net / elapsedDays;
+                        projAvgEl.innerHTML = formatMoney(dailyAvg);
+                        projAvgEl.className = `text-[10px] font-bold ${dailyAvg >= 0 ? 'text-emerald-400' : 'text-red-400'}`;
+                        
+                        [7, 30, 365].forEach(days => {
+                            const netEl = document.getElementById(`proj-net-${days}`);
+                            if (netEl) {
+                                const estimatedNet = dailyAvg * days;
+                                netEl.innerHTML = formatMoney(estimatedNet);
+                                netEl.className = `text-[10px] font-black ${estimatedNet >= 0 ? 'text-emerald-400' : 'text-red-400'} drop-shadow-md`;
+                            }
+                        });
+                    }
+                }
+            }, 1000);
+        }
+
+        document.getElementById('fileInput').addEventListener('change', function(e) {
+            const files = e.target.files;
+            if (!files || files.length === 0) return;
+
+            document.getElementById('loading').classList.remove('hidden');
+
+            const parsePromises = Array.from(files).map(file => {
+                return new Promise((resolve, reject) => {
+                    Papa.parse(file, {
+                        header: true,
+                        skipEmptyLines: true,
+                        complete: function(results) {
+                            resolve(results.data);
+                        },
+                        error: function(error) {
+                            reject(error);
+                        }
+                    });
+                });
+            });
+
+            Promise.all(parsePromises).then(async allDataArrays => {
+                // Deduplicar datos preservando operaciones parciales (partial fills) idénticas
+                // Polymarket a veces genera filas exactamente iguales en un mismo CSV.
+                // Para evitar duplicar al unir CSVs, tomamos la frecuencia máxima de cada fila por archivo.
+                
+                // --- INTENTO DE FUSIÓN CON DATOS GUARDADOS ---
+                let existingData = await loadData() || [];
+                if (existingData.length > 0) {
+                    allDataArrays.push(existingData);
+                }
+
+                const rowCountsPerFile = allDataArrays.map(dataArray => {
+                    const counts = {};
+                    dataArray.forEach(row => {
+                        const str = JSON.stringify(row);
+                        counts[str] = (counts[str] || 0) + 1;
+                    });
+                    return counts;
+                });
+
+                const maxCounts = {};
+                rowCountsPerFile.forEach(counts => {
+                    for (const [rowStr, count] of Object.entries(counts)) {
+                        if (!maxCounts[rowStr] || count > maxCounts[rowStr]) {
+                            maxCounts[rowStr] = count;
+                        }
+                    }
+                });
+
+                const uniqueData = [];
+                for (const [rowStr, count] of Object.entries(maxCounts)) {
+                    const rowObj = JSON.parse(rowStr);
+                    for (let i = 0; i < count; i++) {
+                        uniqueData.push(rowObj);
+                    }
+                }
+
+                // Guardar los datos combinados y deduplicados
+                await saveData(uniqueData);
+
+                document.getElementById('loading').classList.add('hidden');
+                document.getElementById('data-counter').classList.remove('hidden');
+                document.getElementById('clear-data-btn').classList.remove('hidden');
+                document.getElementById('total-rows').innerText = uniqueData.length.toLocaleString();
+                
+                // Limpiar el intervalo anterior si existe
+                if (refreshInterval) clearInterval(refreshInterval);
+                
+                // Analizar datos inmediatamente
+                analyzeData(uniqueData);
+                
+                // Configurar el refresco automático cada segundo solo para elementos dinámicos
+                startRefreshInterval();
+            }).catch(error => {
+                console.error("Error al procesar archivos:", error);
+                document.getElementById('loading').classList.add('hidden');
+                alert("Hubo un error al procesar los archivos CSV.");
+            });
+        });
+
+        function formatTimeElapsed(seconds) {
+            if (seconds <= 0) return "0s";
+            const d = Math.floor(seconds / (3600 * 24));
+            const h = Math.floor((seconds % (3600 * 24)) / 3600);
+            const m = Math.floor((seconds % 3600) / 60);
+            const s = Math.floor(seconds % 60);
+            
+            let res = [];
+            if (d > 0) res.push(`${d}d`);
+            if (h > 0) res.push(`${h}h`);
+            if (m > 0) res.push(`${m}m`);
+            if (s > 0 || res.length === 0) res.push(`${s}s`);
+            return res.join(' ');
+        }
+
+        function analyzeData(data) {
+            let max_ts = 0;
+            let markets = {};
+            
+            // Timestamp de inicio del bot (1774132800)
+            const BOT_START_TS = 1774132800;
+
+            // Paso 1: Agrupar todas las transacciones por mercado
+            data.forEach(row => {
+                const ts = parseInt(row.timestamp);
+                if (isNaN(ts)) return; 
+                
+                if (ts > max_ts) max_ts = ts;
+
+                const mName = row.marketName;
+                if (!markets[mName]) {
+                    markets[mName] = { cost: 0, redeem: 0, buys: 0, first_ts: ts, last_ts: ts };
+                }
+
+                const amt = parseFloat(row.usdcAmount) || 0;
+                
+                if (row.action === 'Buy') {
+                    markets[mName].cost += amt;
+                    markets[mName].buys += 1;
+                } else if (row.action === 'Redeem' || row.action === 'Sell') {
+                    markets[mName].redeem += amt; // "redeem" engloba todos los ingresos (Redeem y Sell)
+                }
+
+                markets[mName].first_ts = Math.min(markets[mName].first_ts, ts);
+                markets[mName].last_ts = Math.max(markets[mName].last_ts, ts);
+            });
+
+            // Mostrar la fecha de la última operación
+            if (max_ts > 0) {
+                window.lastOperationTimestamp = max_ts;
+                localStorage.setItem('cachedLastOperationTs', max_ts);
+                updateTabTitle();
+                const lastDate = new Date(max_ts * 1000);
+                document.getElementById('last-update').classList.remove('hidden');
+                document.getElementById('last-update-time').innerText = lastDate.toLocaleString('es-ES', { 
+                    day: '2-digit', month: '2-digit', year: 'numeric', 
+                    hour: '2-digit', minute: '2-digit' 
+                });
+            }
+
+            const now = new Date(max_ts * 1000);
+            const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() / 1000;
+            
+            if (window.selectedDailyDateTs === undefined) {
+                window.selectedDailyDateTs = startOfToday;
+            }
+
+            const currentDayTs = window.selectedDailyDateTs;
+            const endOfDayTs = currentDayTs + 24 * 3600;
+            const isToday = currentDayTs === startOfToday;
+            
+            const dateObj = new Date(currentDayTs * 1000);
+            const dateStr = dateObj.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: '2-digit' });
+            const isoDateStr = dateObj.toISOString().split('T')[0];
+
+            if (!window.changeDailyDate) {
+                window.changeDailyDate = function(days, event) {
+                    if(event) event.stopPropagation();
+                    window.selectedDailyDateTs += days * 24 * 3600;
+                    if(window.lastAnalyzedData) analyzeData(window.lastAnalyzedData);
+                };
+                window.setDailyDate = function(dateString, event) {
+                    if(event) event.stopPropagation();
+                    if(dateString) {
+                        const [y, m, d] = dateString.split('-');
+                        const ts = new Date(y, m - 1, d).getTime() / 1000;
+                        window.selectedDailyDateTs = ts;
+                        if(window.lastAnalyzedData) analyzeData(window.lastAnalyzedData);
+                    }
+                };
+                window.changeWeekDate = function(dir, event) {
+                    if(event) event.stopPropagation();
+                    window.selectedWeekOffset = (window.selectedWeekOffset || 0) + dir;
+                    if(window.selectedWeekOffset > 0) window.selectedWeekOffset = 0;
+                    window.selectedWeekStartTs = undefined; // Reset custom start so it uses offset
+                    window.selectedWeekEndTs = undefined;
+                    if(window.lastAnalyzedData) analyzeData(window.lastAnalyzedData);
+                };
+                window.setWeekDate = function(dateString, event) {
+                    if(event) event.stopPropagation();
+                    if(dateString) {
+                        const [yStr, wStr] = dateString.split('-W');
+                        const y = parseInt(yStr);
+                        const w = parseInt(wStr);
+                        
+                        const jan4 = new Date(y, 0, 4);
+                        const jan4Day = jan4.getDay() || 7;
+                        const targetMonday = new Date(y, 0, 4 - jan4Day + 1 + (w - 1) * 7);
+                        targetMonday.setHours(0,0,0,0);
+
+                        const nowTs = window.lastOperationTimestamp || (Date.now() / 1000);
+                        const baseDate = new Date(nowTs * 1000);
+                        const baseDay = baseDate.getDay() || 7;
+                        const baseMonday = new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate() - baseDay + 1);
+                        baseMonday.setHours(0,0,0,0);
+                        
+                        const diffTime = targetMonday.getTime() - baseMonday.getTime();
+                        let offset = Math.round(diffTime / (7 * 24 * 3600 * 1000));
+                        if(offset > 0) offset = 0;
+                        window.selectedWeekOffset = offset;
+                        
+                        window.selectedWeekStartTs = undefined;
+                        window.selectedWeekEndTs = undefined;
+                        
+                        if(window.lastAnalyzedData) analyzeData(window.lastAnalyzedData);
+                    }
+                };
+                window.changeMonthDate = function(dir, event) {
+                    if(event) event.stopPropagation();
+                    window.selectedMonthOffset = (window.selectedMonthOffset || 0) + dir;
+                    if(window.selectedMonthOffset > 0) window.selectedMonthOffset = 0;
+                    if(window.lastAnalyzedData) analyzeData(window.lastAnalyzedData);
+                };
+                window.setMonthDate = function(dateString, event) {
+                    if(event) event.stopPropagation();
+                    if(dateString) {
+                        const [y, m] = dateString.split('-');
+                        const nowTs = window.lastOperationTimestamp || (Date.now() / 1000);
+                        const nowDate = new Date(nowTs * 1000);
+                        
+                        let offset = (parseInt(y) - nowDate.getFullYear()) * 12 + (parseInt(m) - 1 - nowDate.getMonth());
+                        if(offset > 0) offset = 0;
+                        window.selectedMonthOffset = offset;
+                        if(window.lastAnalyzedData) analyzeData(window.lastAnalyzedData);
+                    }
+                };
+            }
+            window.lastAnalyzedData = data;
+
+            // --- Lógica Semana ---
+            if (window.selectedWeekOffset === undefined) window.selectedWeekOffset = 0;
+            
+            const baseDay = now.getDay();
+            const baseDiff = now.getDate() - baseDay + (baseDay === 0 ? -6 : 1);
+            const baseMonday = new Date(now.getFullYear(), now.getMonth(), baseDiff);
+            baseMonday.setHours(0,0,0,0);
+            
+            let startOfWeek, weekMaxTs, targetMonday;
+
+            if (window.selectedWeekStartTs !== undefined) {
+                // If a specific week was selected from the picker, use its exact timestamps
+                startOfWeek = window.selectedWeekStartTs;
+                weekMaxTs = window.selectedWeekEndTs;
+                targetMonday = new Date(startOfWeek * 1000);
+            } else {
+                // Otherwise calculate based on the offset (arrows)
+                targetMonday = new Date(baseMonday.getTime() + window.selectedWeekOffset * 7 * 24 * 3600 * 1000);
+                const targetSunday = new Date(targetMonday.getTime() + 7 * 24 * 3600 * 1000);
+                startOfWeek = targetMonday.getTime() / 1000;
+                weekMaxTs = window.selectedWeekOffset === 0 ? Infinity : targetSunday.getTime() / 1000;
+            }
+            
+            let weekTitleStr = 'ÚLTIMA SEMANA';
+            if (window.selectedWeekOffset === -1) weekTitleStr = 'HACE 1 SEM';
+            else if (window.selectedWeekOffset < -1) weekTitleStr = `HACE ${Math.abs(window.selectedWeekOffset)} SEM`;
+            
+            // Generate week string for input type="week"
+            const getISOWeekInfo = (date) => {
+                const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+                const dayNum = d.getUTCDay() || 7;
+                d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+                const yearStart = new Date(Date.UTC(d.getUTCFullYear(),0,1));
+                return { year: d.getUTCFullYear(), week: Math.ceil((((d - yearStart) / 86400000) + 1)/7) };
+            };
+            const wInfo = getISOWeekInfo(targetMonday);
+            const isoWeekStr = `${wInfo.year}-W${wInfo.week.toString().padStart(2, '0')}`;
+            
+            const weeklyTitleHtml = `
+                <div class="flex items-center gap-1 z-20 pointer-events-auto -ml-1">
+                    <button onclick="changeWeekDate(-1, event)" class="hover:bg-slate-700 px-1 py-0.5 rounded text-slate-400 hover:text-white transition-colors text-[10px]" title="Semana anterior">◀</button>
+                    <div class="relative cursor-pointer group flex items-center bg-slate-800/50 hover:bg-slate-700/50 px-1.5 py-0.5 rounded transition-colors">
+                        <span class="font-bold ${window.selectedWeekOffset === 0 ? 'text-indigo-400' : 'text-slate-200'} text-[10px] uppercase tracking-wider">🗓️ ${weekTitleStr}</span>
+                        <input type="week" onchange="setWeekDate(this.value, event)" onclick="this.showPicker(); if(event) event.stopPropagation();" class="absolute inset-0 opacity-0 cursor-pointer w-full h-full" value="${isoWeekStr}">
+                    </div>
+                    <button onclick="changeWeekDate(1, event)" class="hover:bg-slate-700 px-1 py-0.5 rounded text-slate-400 hover:text-white transition-colors text-[10px]" title="Semana siguiente" ${window.selectedWeekOffset >= 0 ? 'disabled style="opacity: 0.3; cursor: not-allowed;"' : ''}>▶</button>
+                </div>
+            `;
+
+            // --- Lógica Mes ---
+            if (window.selectedMonthOffset === undefined) window.selectedMonthOffset = 0;
+            let mDate = new Date(now.getFullYear(), now.getMonth() + window.selectedMonthOffset, 1);
+            let nextMonthDate = new Date(now.getFullYear(), now.getMonth() + window.selectedMonthOffset + 1, 1);
+            
+            const startOfMonth = mDate.getTime() / 1000;
+            const endOfMonth = window.selectedMonthOffset === 0 ? Infinity : nextMonthDate.getTime() / 1000;
+            
+            let monthStr = mDate.toLocaleDateString('es-ES', { month: 'long' });
+            if (mDate.getFullYear() !== now.getFullYear()) monthStr += ' ' + mDate.getFullYear();
+            
+            const mYear = mDate.getFullYear();
+            const mMonth = (mDate.getMonth() + 1).toString().padStart(2, '0');
+            const isoMonthStr = `${mYear}-${mMonth}`;
+            
+            const monthlyTitleHtml = `
+                <div class="flex items-center gap-1 z-20 pointer-events-auto -ml-1">
+                    <button onclick="changeMonthDate(-1, event)" class="hover:bg-slate-700 px-1 py-0.5 rounded text-slate-400 hover:text-white transition-colors text-[10px]" title="Mes anterior">◀</button>
+                    <div class="relative cursor-pointer group flex items-center bg-slate-800/50 hover:bg-slate-700/50 px-1.5 py-0.5 rounded transition-colors">
+                        <span class="font-bold ${window.selectedMonthOffset === 0 ? 'text-purple-400' : 'text-slate-200'} text-[10px] uppercase tracking-wider">📆 ${monthStr}</span>
+                        <input type="month" onchange="setMonthDate(this.value, event)" onclick="this.showPicker(); if(event) event.stopPropagation();" class="absolute inset-0 opacity-0 cursor-pointer w-full h-full" value="${isoMonthStr}">
+                    </div>
+                    <button onclick="changeMonthDate(1, event)" class="hover:bg-slate-700 px-1 py-0.5 rounded text-slate-400 hover:text-white transition-colors text-[10px]" title="Mes siguiente" ${window.selectedMonthOffset >= 0 ? 'disabled style="opacity: 0.3; cursor: not-allowed;"' : ''}>▶</button>
+                </div>
+            `;
+
+            const dailyTitleHtml = `
+                <div class="flex items-center gap-1 z-20 pointer-events-auto -ml-1">
+                    <button onclick="changeDailyDate(-1, event)" class="hover:bg-slate-700 px-1 py-0.5 rounded text-slate-400 hover:text-white transition-colors text-[10px]" title="Día anterior">◀</button>
+                    <div class="relative cursor-pointer group flex items-center bg-slate-800/50 hover:bg-slate-700/50 px-1.5 py-0.5 rounded transition-colors">
+                        <span class="font-bold ${isToday ? 'text-blue-400' : 'text-slate-200'} text-[10px] uppercase tracking-wider">${isToday ? '📅 HOY' : '📅 ' + dateStr}</span>
+                        <input type="date" onchange="setDailyDate(this.value, event)" onclick="this.showPicker(); if(event) event.stopPropagation();" class="absolute inset-0 opacity-0 cursor-pointer w-full h-full" value="${isoDateStr}">
+                    </div>
+                    <button onclick="changeDailyDate(1, event)" class="hover:bg-slate-700 px-1 py-0.5 rounded text-slate-400 hover:text-white transition-colors text-[10px]" title="Día siguiente">▶</button>
+                </div>
+            `;
+
+            const periods = [
+                { id: 'today', titleHtml: dailyTitleHtml, min_ts: currentDayTs, max_ts: endOfDayTs, color: 'border-blue-500', bg: 'bg-blue-900/20' },
+                { id: 'week', titleHtml: weeklyTitleHtml, min_ts: startOfWeek, max_ts: weekMaxTs, color: 'border-indigo-500', bg: 'bg-indigo-900/20' },
+                { id: 'month', titleHtml: monthlyTitleHtml, min_ts: startOfMonth, max_ts: endOfMonth, color: 'border-purple-500', bg: 'bg-purple-900/20' },
+                { id: 'total', titleHtml: '<h2 class="text-[10px] font-bold text-slate-200 uppercase tracking-wider">📚 Historial Total</h2>', min_ts: 0, max_ts: Infinity, color: 'border-slate-600', bg: 'bg-slate-800' }
+            ];
+
+            const resultsDiv = document.getElementById('results');
+            if (resultsDiv.innerHTML.includes('Sube tu archivo CSV')) {
+                resultsDiv.innerHTML = '';
+            }
+
+            // --- CÁLCULO PERIODOS GENERALES ---
+            periods.forEach(p => {
+                let won = 0, lost = 0, buys = 0;
+                let min_ts_period = Infinity, max_ts_period = 0;
+
+                Object.values(markets).forEach(m => {
+                    if (m.last_ts >= p.min_ts && m.last_ts < p.max_ts) {
+                        won += m.redeem;
+                        lost += m.cost;
+                        buys += m.buys;
+                        min_ts_period = Math.min(min_ts_period, m.first_ts);
+                        max_ts_period = Math.max(max_ts_period, m.last_ts);
+                    }
+                });
+
+                const net = won - lost;
+                const cost = lost;
+                const redeem = won;
+                const elapsed = (max_ts_period >= min_ts_period && min_ts_period !== Infinity) ? max_ts_period - min_ts_period : 0;
+                const netColor = net >= 0 ? 'text-emerald-400' : 'text-red-400';
+                const netBg = net >= 0 ? 'bg-emerald-900/20 border-emerald-500/30' : 'bg-red-900/20 border-red-500/30';
+
+                const cardContent = `
+                <div class="absolute -top-4 -right-4 w-16 h-16 ${p.bg} rounded-full blur-xl opacity-50 pointer-events-none"></div>
+                <div class="flex justify-between items-start mb-2 relative z-10">
+                    ${p.titleHtml}
+                    <span class="text-[8px] text-slate-500 bg-slate-800 px-1.5 py-0.5 rounded border border-slate-700 font-mono">⏱️ ${formatTimeElapsed(elapsed)}</span>
+                </div>
+                <div class="grid grid-cols-2 gap-2 mb-2 flex-1 relative z-10">
+                    <div class="bg-[#1e293b] p-1.5 rounded border border-slate-700 flex flex-col justify-center">
+                        <div class="text-[11px] md:text-[8px] text-slate-400 uppercase tracking-wider mb-1 md:mb-0.5">Inversión</div>
+                        <div class="text-[14px] md:text-[10px] font-bold text-red-400">${formatMoney(-cost)}</div>
+                    </div>
+                    <div class="bg-[#1e293b] p-1.5 rounded border border-slate-700 flex flex-col justify-center">
+                        <div class="text-[11px] md:text-[8px] text-slate-400 uppercase tracking-wider mb-1 md:mb-0.5">Retorno</div>
+                        <div class="text-[14px] md:text-[10px] font-bold text-emerald-400">${formatMoney(redeem)}</div>
+                    </div>
+                </div>
+                <div class="bg-slate-800/80 p-4 md:p-2 rounded-xl md:rounded border border-slate-600 flex justify-between items-center relative z-10 mt-auto min-h-[44px] md:min-h-0">
+                    <span class="text-[8px] font-bold text-slate-300 uppercase tracking-wide">Neto</span>
+                    <div class="text-[10px] font-black ${netColor} drop-shadow-sm text-right">${formatMoney(net)}</div>
+                </div>
+                ${p.id === 'today' && net < 0 ? `
+                <div class="mt-3 md:mt-2 grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-2">
+                    <div class="bg-[#1e293b] p-3 md:p-1.5 rounded-xl md:rounded border border-slate-700 flex justify-between items-center min-h-[44px] md:min-h-0">
+                        <span class="text-[8px] text-slate-400 uppercase tracking-wider">Cobertura 2%</span>
+                        <span class="text-[14px] md:text-[10px] font-bold text-emerald-400">${formatMoney((-net)/0.02)}</span>
+                    </div>
+                    <div class="bg-[#1e293b] p-3 md:p-1.5 rounded-xl md:rounded border border-slate-700 flex justify-between items-center min-h-[44px] md:min-h-0">
+                        <span class="text-[8px] text-slate-400 uppercase tracking-wider">Cobertura 3%</span>
+                        <span class="text-[14px] md:text-[10px] font-bold text-emerald-400">${formatMoney((-net)/0.03)}</span>
+                    </div>
+                </div>` : ``}
+                `;
+
+                let cardEl = document.getElementById(`period-card-${p.id}`);
+                if (!cardEl) {
+                    cardEl = document.createElement('div');
+                    cardEl.id = `period-card-${p.id}`;
+                    cardEl.className = `bg-[#0f172a]/50 rounded-lg border ${p.color} flex flex-col p-2.5 h-full relative overflow-hidden`;
+                    resultsDiv.appendChild(cardEl);
+                }
+                cardEl.innerHTML = cardContent;
+            });
+
+            // --- CÁLCULO EXCLUSIVO DEL BOT ---
+            let bot_won = 0, bot_lost = 0, bot_buys = 0;
+            let bot_min_ts = Infinity, bot_max_ts = 0;
+            
+            // Variables para análisis de pérdidas
+            let bot_losing_trades = 0;
+            let bot_winning_trades = 0;
+            let bot_max_drawdown = 0;
+            let bot_total_invested_in_losses = 0;
+            
+            // Ordenar todos los datos por timestamp
+            const bot_sorted_data = data.filter(row => {
+                const ts = parseInt(row.timestamp);
+                return !isNaN(ts) && ts >= BOT_START_TS;
+            }).sort((a, b) => parseInt(a.timestamp) - parseInt(b.timestamp));
+
+            // Agrupar transacciones del bot por mercado (para simular el saldo con mercados resueltos)
+            let bot_markets = {};
+            bot_sorted_data.forEach(row => {
+                const mName = row.marketName;
+                if (!bot_markets[mName]) {
+                    bot_markets[mName] = { net: 0, closed: false };
+                }
+                const amt = parseFloat(row.usdcAmount) || 0;
+                if (row.action === 'Buy') {
+                    bot_markets[mName].net -= amt;
+                } else if (row.action === 'Redeem' || row.action === 'Sell') {
+                    bot_markets[mName].net += amt;
+                    bot_markets[mName].closed = true; // Asumimos que si hay un redeem/sell el mercado ya retornó liquidez
+                }
+            });
+
+            // Calcular drawdown basado SOLO en mercados cerrados/liquidados para no contar posiciones abiertas como pérdidas
+            let realized_balance = 0;
+            let peak_realized_balance = 0;
+            
+            // Recorremos los mercados del bot ordenados por su última transacción
+            const sorted_bot_markets = Object.values(markets).filter(m => m.first_ts >= BOT_START_TS).sort((a, b) => a.last_ts - b.last_ts);
+            
+            sorted_bot_markets.forEach(m => {
+                const m_net = m.redeem - m.cost;
+                realized_balance += m_net;
+                
+                if (realized_balance > peak_realized_balance) {
+                    peak_realized_balance = realized_balance;
+                }
+                
+                const drawdown = peak_realized_balance - realized_balance;
+                if (drawdown > bot_max_drawdown) {
+                    bot_max_drawdown = drawdown;
+                }
+            });
+
+            Object.values(markets).forEach(m => {
+                // Consideramos que un mercado fue operado por el bot si su primera actividad es >= BOT_START_TS
+                if (m.first_ts >= BOT_START_TS) {
+                    bot_won += m.redeem;
+                    bot_lost += m.cost;
+                    bot_buys += m.buys;
+                    bot_min_ts = Math.min(bot_min_ts, m.first_ts);
+                    bot_max_ts = Math.max(bot_max_ts, m.last_ts);
+                    
+                    const m_net = m.redeem - m.cost;
+                    if (m_net < 0) {
+                        bot_losing_trades++;
+                        bot_total_invested_in_losses += m.cost;
+                    } else if (m_net > 0) {
+                        bot_winning_trades++;
+                    }
+                }
+            });
+
+            const bot_net = bot_won - bot_lost;
+            
+            window.bot_min_ts = bot_min_ts;
+            window.bot_net = bot_net;
+            
+            // Calcular el tiempo transcurrido exacto usando la hora actual vs la primera operación del bot
+            const now_ts = Math.floor(Date.now() / 1000);
+            const bot_elapsed = (bot_min_ts !== Infinity) ? now_ts - bot_min_ts : 0;
+            
+            const botNetColor = bot_net >= 0 ? 'text-emerald-400' : 'text-red-400';
+            
+            const total_resolved_trades = bot_losing_trades + bot_winning_trades;
+            const win_rate = total_resolved_trades > 0 ? ((bot_winning_trades / total_resolved_trades) * 100).toFixed(1) : 0;
+
+            // Encontrar el peor mercado (para mostrar en el Beneficio Neto si hay pérdida general)
+            let worst_market = null;
+            Object.entries(markets).forEach(([name, m]) => {
+                if (m.first_ts >= BOT_START_TS) {
+                    const m_net = m.redeem - m.cost;
+                    if (m_net < 0 && (!worst_market || m_net < worst_market.net)) {
+                        worst_market = { 
+                            name: name, 
+                            net: m_net, 
+                            ts: m.first_ts,
+                            date: new Date(m.first_ts * 1000).toLocaleString('es-ES', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+                        };
+                    }
+                }
+            });
+
+            let beneficioNetoHtml = `
+            <div class="col-span-1 md:col-span-2 bg-indigo-500/10 p-4 md:p-2 rounded-xl md:rounded-lg border border-indigo-500/30 flex justify-between items-center mt-2 md:mt-0.5 min-h-[44px]">
+                <span class="text-[12px] md:text-[8px] font-bold text-indigo-300 uppercase tracking-wider">Beneficio Neto</span>
+                <div class="text-[10px] font-black ${botNetColor} drop-shadow-md text-right">${formatMoney(bot_net)}</div>
+            </div>
+            `;
+
+            if (bot_net < 0 && worst_market) {
+                const lossMarketName = worst_market.name === 'undefined' || !worst_market.name ? worst_market.date : worst_market.name;
+                beneficioNetoHtml = `
+            <div class="col-span-1 md:col-span-2 bg-indigo-500/10 p-4 md:p-2 rounded-xl md:rounded-lg border border-indigo-500/30 flex justify-between items-center mt-2 md:mt-0.5 min-h-[44px]">
+                <div class="flex flex-col">
+                    <span class="text-[12px] md:text-[8px] font-bold text-indigo-300 uppercase tracking-wider">Beneficio Neto</span>
+                    <span class="text-[11px] md:text-[7px] text-indigo-200">Fecha: ${worst_market.date}</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <div class="text-[10px] font-black ${botNetColor} drop-shadow-md text-right">${formatMoney(bot_net)}</div>
+                    <a href="mercado-fallido-detalle.html?market=${encodeURIComponent(worst_market.name)}&ts=${worst_market.ts}" target="_blank" class="text-[8px] text-blue-300 hover:text-blue-400 bg-[#0f172a] px-1.5 py-0.5 rounded border border-blue-500/30 transition-colors">ver más detalles</a>
+                </div>
+            </div>
+                `;
+            }
+
+            const botMetricsDiv = document.getElementById('bot-metrics');
+            botMetricsDiv.innerHTML = `
+            <div class="bg-[#0f172a] p-3 md:p-1.5 rounded-xl md:rounded border border-slate-700 flex flex-col justify-center items-center text-center">
+                <div class="text-[11px] md:text-[8px] text-slate-400 uppercase tracking-wider mb-1 md:mb-0.5">Operaciones</div>
+                <div class="text-[14px] md:text-[10px] font-black text-slate-200">${bot_buys}</div>
+            </div>
+            <div class="bg-[#0f172a] p-3 md:p-1.5 rounded-xl md:rounded border border-slate-700 flex flex-col justify-center items-center text-center">
+                <div class="text-[11px] md:text-[8px] text-slate-400 uppercase tracking-wider mb-1 md:mb-0.5">Tiempo Activo</div>
+                <div id="bot-elapsed-time" class="text-[14px] md:text-[10px] font-bold text-slate-200">${formatTimeElapsed(bot_elapsed)}</div>
+            </div>
+            <div class="bg-[#0f172a] p-3 md:p-1.5 rounded-xl md:rounded border border-slate-700 flex flex-col justify-center items-center text-center">
+                <div class="text-[11px] md:text-[8px] text-slate-400 uppercase tracking-wider mb-1 md:mb-0.5">Invertido</div>
+                <div class="text-[14px] md:text-[10px] font-bold text-red-400">${formatMoney(-bot_lost)}</div>
+            </div>
+            <div class="bg-[#0f172a] p-3 md:p-1.5 rounded-xl md:rounded border border-slate-700 flex flex-col justify-center items-center text-center">
+                <div class="text-[11px] md:text-[8px] text-slate-400 uppercase tracking-wider mb-1 md:mb-0.5">Retorno Bruto</div>
+                <div class="text-[14px] md:text-[10px] font-bold text-emerald-400">${formatMoney(bot_won)}</div>
+            </div>
+            ${beneficioNetoHtml}
+        `;
+
+            // --- ANÁLISIS DE PÉRDIDAS (NUEVO) ---
+            // Recopilar mercados fallidos para mostrarlos en el auditor experto
+            const losing_markets = Object.entries(markets)
+                .filter(([name, m]) => m.first_ts >= BOT_START_TS && (m.redeem - m.cost) < -0.001)
+                .map(([name, m]) => ({ 
+                    name: (name === 'undefined' || !name) ? new Date(m.first_ts * 1000).toLocaleString('es-ES', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : name, 
+                    realName: name,
+                    net: m.redeem - m.cost,
+                    first_ts: m.first_ts,
+                    last_ts: m.last_ts
+                }))
+                .sort((a, b) => a.net - b.net); // Peores primero
+
+            // Calcular tiempo sin pérdidas
+            let time_since_loss_text = "--";
+            window.last_loss_ts = null; // Guardar globalmente para refresco automático
+            if (losing_markets.length > 0) {
+                const last_loss_ts = Math.max(...losing_markets.map(m => m.first_ts));
+                window.last_loss_ts = last_loss_ts;
+                const seconds_since_loss = now_ts - last_loss_ts;
+                if (seconds_since_loss > 0) {
+                    time_since_loss_text = formatTimeElapsed(seconds_since_loss) + ' sin pérdidas';
+                }
+            } else if (bot_elapsed > 0) {
+                time_since_loss_text = formatTimeElapsed(bot_elapsed) + ' sin pérdidas';
+            }
+            
+            const lossFreeEl = document.getElementById('loss-free-counter');
+            if (lossFreeEl) {
+                lossFreeEl.innerText = time_since_loss_text;
+                if (time_since_loss_text !== '--') {
+                    lossFreeEl.classList.add('text-emerald-400');
+                    lossFreeEl.classList.remove('text-slate-500');
+                }
+            }
+            renderLossAnalysis(bot_losing_trades, total_resolved_trades, win_rate, bot_total_invested_in_losses, bot_max_drawdown, bot_net, losing_markets);
+
+            // --- PROYECCIONES BASADAS EN EL BOT ---
+            window.bot_net = bot_net; // Guardar globalmente para refresco automático
+        renderBotProjections(bot_net, bot_elapsed, bot_sorted_data);
+    }
+
+        function renderLossAnalysis(losing_trades, total_trades, win_rate, lost_capital, max_drawdown, net_profit, losing_markets = []) {
+        let risk_level = "Bajo";
+        let risk_color = "text-emerald-400";
+        if (max_drawdown > 50) { risk_level = "Medio"; risk_color = "text-yellow-400"; }
+        if (max_drawdown > 150) { risk_level = "Alto"; risk_color = "text-orange-400"; }
+        if (max_drawdown > 300) { risk_level = "Crítico"; risk_color = "text-red-500"; }
+
+        let insights = [];
+        if (win_rate < 50) {
+            insights.push("📉 <b class='text-slate-200'>Win Rate Crítico:</b> Acierto < 50%. Sugerencia: Endurecer filtros de entrada o confirmaciones de tendencia.");
+        } else {
+            insights.push("✅ <b class='text-slate-200'>Win Rate Saludable:</b> Acierto sólido. Enfoque: optimizar tamaño de posición.");
+        }
+
+        if (max_drawdown > (net_profit > 0 ? net_profit * 0.5 : 50)) {
+            insights.push("⚠️ <b class='text-slate-200'>Drawdown Elevado:</b> Rachas negativas agresivas. Sugerencia: Implementar Stop Loss duro o reducir size tras 2 pérdidas.");
+        }
+
+        if (lost_capital > 100) {
+            insights.push("💡 <b class='text-slate-200'>Fuga de Capital:</b> Capital bloqueado en pérdidas. Sugerencia: Usar 'Sell' temprano para mitigar impacto.");
+        }
+        
+        if (insights.length === 0) {
+            insights.push("🌟 <b class='text-slate-200'>Rendimiento Óptimo:</b> Parámetros balanceados.");
+        }
+
+        const top_losers_html = losing_markets.slice(0, 3).map(m => `
+            <a href="mercado-fallido-detalle.html?market=${encodeURIComponent(m.realName)}&ts=${m.first_ts}" target="_blank" class="block bg-[#0f172a] p-3 md:p-1.5 rounded-xl md:rounded border border-slate-700 min-h-[44px] hover:border-red-500/50 hover:bg-red-500/5 transition-all group">
+                <div class="flex flex-col md:flex-row md:justify-between md:items-center gap-2">
+                    <span class="text-[14px] md:text-[9px] text-slate-300 truncate pr-2 leading-tight group-hover:text-white transition-colors" title="${m.name}">${m.name}</span>
+                    <div class="flex items-center justify-between md:justify-end gap-3 md:gap-2 shrink-0">
+                        <button onclick="event.stopPropagation(); window.open('${'https://polymarket.com/event/btc-updown-5m-' + (Math.floor(m.first_ts / 300) * 300 + 300)}', '_blank')" class="text-[12px] md:text-[9px] bg-blue-900/30 text-blue-300 hover:bg-blue-900/50 hover:text-blue-200 px-3 py-2 md:px-1.5 md:py-0.5 rounded border border-blue-700/50 flex items-center justify-center min-h-[44px] md:min-h-0">↗</button>
+                        <span class="text-[9px] font-bold text-red-400 shrink-0">-$${Math.abs(m.net).toFixed(2)}</span>
+                    </div>
+                </div>
+            </a>
+        `).join('');
+
+        const losers_section = losing_markets.length > 0 ? `
+            <div class="mt-2 flex flex-col gap-1.5 shrink-0">
+                <div class="flex justify-between items-center px-1">
+                    <span class="text-[8px] text-slate-400 uppercase tracking-wider font-bold">Peores Pérdidas (Click para detalles)</span>
+                </div>
+                ${top_losers_html}
+            </div>
+        ` : '';
+
+        const analysisHTML = `
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-2 shrink-0">
+                <a href="perdidas.html" target="_blank" class="bg-[#0f172a] p-4 md:p-2 rounded-xl md:rounded-lg border border-slate-700 min-h-[44px] flex justify-between items-center hover:bg-red-500/10 hover:border-red-500/50 transition-all cursor-pointer group" title="Ver detalles de los mercados en pérdida">
+                    <span class="text-[12px] md:text-[8px] text-slate-400 uppercase tracking-wider group-hover:text-red-300 transition-colors flex items-center gap-1">Mercados Fallidos <span class="text-[14px] md:text-[10px] leading-none md:opacity-0 group-hover:opacity-100 transition-opacity">↗</span></span>
+                    <span class="text-[14px] md:text-[10px] font-bold text-red-400">${losing_trades} <span class="text-[12px] md:text-[8px] text-slate-600">/ ${total_trades}</span></span>
+                </a>
+                <div class="bg-[#0f172a] p-4 md:p-2 rounded-xl md:rounded-lg border border-slate-700 min-h-[44px] flex justify-between items-center">
+                    <span class="text-[8px] text-slate-400 uppercase tracking-wider">Tasa Acierto</span>
+                    <span class="text-[10px] font-bold text-blue-400">${win_rate}%</span>
+                </div>
+                <div class="bg-[#0f172a] p-4 md:p-2 rounded-xl md:rounded-lg border border-slate-700 min-h-[44px] flex justify-between items-center">
+                    <span class="text-[8px] text-slate-400 uppercase tracking-wider">Peor Racha</span>
+                    <span class="text-[10px] font-bold ${risk_color}">-$${max_drawdown.toFixed(2)}</span>
+                </div>
+                <div class="bg-[#0f172a] p-4 md:p-2 rounded-xl md:rounded-lg border border-slate-700 min-h-[44px] flex justify-between items-center">
+                    <span class="text-[8px] text-slate-400 uppercase tracking-wider">Nivel Riesgo</span>
+                    <span class="text-[10px] font-bold ${risk_color} uppercase bg-slate-800 px-1.5 py-0.5 rounded border border-slate-700">${risk_level}</span>
+                </div>
+            </div>
+
+            ${losers_section}
+
+            <div onclick="window.open('recomendaciones-bot.html', '_blank')" class="mt-3 flex-1 flex flex-col min-h-0 bg-blue-900/10 rounded-lg border border-blue-800/30 cursor-pointer hover:bg-blue-900/20 hover:border-blue-500/50 transition-colors group">
+                <div class="px-2.5 py-1.5 border-b border-blue-800/30 bg-blue-900/20 shrink-0 flex justify-between items-center group-hover:bg-blue-800/40 transition-colors">
+                    <h3 class="text-[8px] font-bold text-blue-300 uppercase tracking-wider group-hover:text-blue-200">Diagnóstico y Recomendaciones</h3>
+                    <span class="text-[8px] text-blue-400 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">Ver estimaciones detalladas <span>↗</span></span>
+                </div>
+                <div class="p-2 flex-1 overflow-y-auto custom-scrollbar">
+                    <ul class="flex flex-col gap-2">
+                        ${insights.map(i => `<li class="text-[10px] leading-relaxed text-slate-300 border-b border-slate-700/50 pb-2 last:border-0 last:pb-0 pointer-events-none">${i}</li>`).join('')}
+                    </ul>
+                </div>
+            </div>
+        `;
+        
+        const expertAnalysis = document.getElementById('expert-analysis');
+        if (expertAnalysis) {
+            expertAnalysis.innerHTML = analysisHTML;
+        }
+    }
+
+    function resetBalanceCalibration() {
+        const newPortfolio = prompt("Introduce tu Saldo 'Portfolio' actual (ej. 697.95):", "697.95");
+        if (newPortfolio === null) return;
+        
+        const newAvailable = prompt("Introduce tu Saldo 'Available to trade' actual (ej. 697.67):", "697.67");
+        if (newAvailable === null) return;
+
+        const newDesfase = prompt("Introduce el desfase (dinero retenido o no trackeado) actual (ej. 0.28):", "0.28");
+        if (newDesfase === null) return;
+        
+        const p = parseFloat(newPortfolio.replace(',', '.'));
+        const a = parseFloat(newAvailable.replace(',', '.'));
+        const d = parseFloat(newDesfase.replace(',', '.'));
+        
+        if (!isNaN(p) && !isNaN(a) && !isNaN(d)) {
+            localStorage.removeItem('polyOffsets');
+            localStorage.setItem('polyTarget', JSON.stringify({ p, a, d }));
+            location.reload();
+        } else {
+            alert("Por favor, introduce números válidos.");
+        }
+    }
+
+    function calculatePortfolioBalance(data) {
+        let raw_cash_flow = 0;
+        let active_invested = 0;
+        let markets = {};
+
+        data.forEach(row => {
+            const action = row.action ? row.action.trim() : '';
+            const amt = parseFloat(row.usdcAmount) || 0;
+            const mName = row.marketName || 'Unknown';
+
+            if (action === 'Deposit') {
+                raw_cash_flow += amt;
+            } else if (action === 'Withdraw' || action === 'Withdrawal') {
+                raw_cash_flow -= amt;
+            } else if (action === 'Buy') {
+                raw_cash_flow -= amt;
+                if (!markets[mName]) markets[mName] = { buys: 0, sells: 0, redeemed: false };
+                markets[mName].buys += amt;
+            } else if (action === 'Sell') {
+                raw_cash_flow += amt;
+                if (!markets[mName]) markets[mName] = { buys: 0, sells: 0, redeemed: false };
+                markets[mName].sells += amt;
+            } else if (action === 'Redeem') {
+                raw_cash_flow += amt;
+                if (!markets[mName]) markets[mName] = { buys: 0, sells: 0, redeemed: false };
+                markets[mName].redeemed = true;
+            }
+        });
+
+        Object.values(markets).forEach(m => {
+            if (!m.redeemed) {
+                const net_invested = m.buys - m.sells;
+                if (net_invested > 0) {
+                    active_invested += net_invested;
+                }
+            }
+        });
+
+        let offsets = JSON.parse(localStorage.getItem('polyOffsets'));
+        const customTarget = JSON.parse(localStorage.getItem('polyTarget'));
+
+        if (!offsets) {
+            const target_portfolio = customTarget ? customTarget.p : 697.95;
+            const target_available = customTarget ? customTarget.a : 697.67;
+            const target_desfase = customTarget && customTarget.d !== undefined ? customTarget.d : 0.28;
+            
+            offsets = {
+                cash_offset: target_available - raw_cash_flow,
+                invested_offset: (target_portfolio - target_available) - active_invested - target_desfase,
+                desfase: target_desfase
+            };
+            localStorage.setItem('polyOffsets', JSON.stringify(offsets));
+            localStorage.removeItem('polyTarget');
+        }
+
+        const available = raw_cash_flow + offsets.cash_offset;
+        const invested = active_invested + offsets.invested_offset;
+        const desfase = offsets.desfase || 0;
+        const portfolio = available + invested + desfase;
+        
+        window.currentAvailableBalance = available;
+        localStorage.setItem('cachedAvailableBalance', available);
+        updateTabTitle();
+        
+        const portfolioEl = document.getElementById('portfolio-balance');
+        const availableEl = document.getElementById('available-balance');
+        
+        if (portfolioEl) {
+            portfolioEl.className = `text-[12px] font-black tracking-wide ${portfolio >= 0 ? 'text-indigo-400' : 'text-red-400'}`;
+            portfolioEl.innerText = '$' + portfolio.toFixed(2);
+        }
+        if (availableEl) {
+            availableEl.className = `text-[12px] font-black tracking-wide ${available >= 0 ? 'text-emerald-400' : 'text-red-400'}`;
+            availableEl.innerText = '$' + available.toFixed(2);
+        }
+    }
+
+    function renderBotProjections(bot_net, bot_elapsed_seconds, bot_sorted_data) {
+        const contentDiv = document.getElementById('projections-content');
+
+        if (bot_elapsed_seconds <= 0 || bot_net === 0) {
+            contentDiv.innerHTML = `
+                <div class="text-center text-slate-500 flex flex-col items-center justify-center h-full m-auto">
+                    <span class="text-2xl mb-1 block leading-none">⏳</span>
+                    <span class="text-[9px] uppercase tracking-wider">Se requiere más tiempo</span>
+                </div>`;
+            updateProjectionChart([]); // Limpiar gráfico
+            return;
+        }
+
+        const elapsedDays = bot_elapsed_seconds / 86400;
+        const dailyAvg = bot_net / elapsedDays;
+
+        const timeframes = [
+            { title: '1 Semana', days: 7, icon: '📅' },
+            { title: '1 Mes', days: 30, icon: '📈' },
+            { title: '1 Año', days: 365, icon: '🚀' }
+        ];
+
+        const avgColor = dailyAvg >= 0 ? 'text-emerald-400' : 'text-red-400';
+        
+        let html = `
+            <div class="bg-[#0f172a] p-4 md:p-2 rounded-xl md:rounded-lg border border-slate-700 min-h-[44px] flex justify-between items-center mb-2 shrink-0">
+                <span class="text-[8px] text-slate-400 uppercase tracking-wider">Ritmo Diario</span>
+                <div id="proj-daily-avg" class="text-[10px] font-bold ${avgColor}">${formatMoney(dailyAvg)}</div>
+            </div>
+            <div class="flex flex-col gap-1.5 flex-1 overflow-y-auto custom-scrollbar pr-1">
+        `;
+
+        timeframes.forEach(tf => {
+            const estimatedNet = dailyAvg * tf.days;
+            const netColor = estimatedNet >= 0 ? 'text-emerald-400' : 'text-red-400';
+            
+            html += `
+                <div class="bg-slate-800/50 p-2 rounded-lg border border-slate-700 flex items-center justify-between hover:bg-slate-700/50 transition-colors">
+                    <div class="flex items-center gap-2">
+                        <div class="text-[10px] bg-[#0f172a] p-1.5 rounded shadow-inner border border-slate-700 leading-none">${tf.icon}</div>
+                        <div class="text-[10px] font-bold text-slate-200 uppercase tracking-wider">${tf.title}</div>
+                    </div>
+                    <div class="text-right">
+                        <div id="proj-net-${tf.days}" class="text-[10px] font-black ${netColor} drop-shadow-md">
+                            ${formatMoney(estimatedNet)}
+                        </div>
+                    </div>
+                </div>
+            `;
+        });
+
+        html += `</div>`;
+        contentDiv.innerHTML = html;
+
+        // Actualizar saldo de cartera
+        calculatePortfolioBalance(bot_sorted_data);
+
+        // Actualizar el gráfico de línea con datos reales
+        updateProjectionChart(bot_sorted_data);
+        updateDailyChart(bot_sorted_data);
+        updatePerDayChart(bot_sorted_data);
+    }
+
+    let projectionChartInstance = null;
+    let dailyChartInstance = null;
+    let perDayChartInstance = null;
+
+    const CHART_PALETTE = ['#34d399', '#60a5fa', '#f472b6', '#fbbf24', '#c084fc', '#f87171', '#38bdf8', '#a3e635'];
+
+    function getConfigColors() {
+        const configs = JSON.parse(localStorage.getItem('botConfigs')) || [
+            { id: '1774132800', normal: 5, trasPerdida: 50, numTrasPerdida: 15, salida: 25, active: true }
+        ];
+        const sortedConfigs = [...configs].sort((a, b) => parseInt(a.id) - parseInt(b.id));
+        return sortedConfigs.map((cfg, idx) => ({
+            ...cfg,
+            color: CHART_PALETTE[idx % CHART_PALETTE.length]
+        }));
+    }
+
+    function getColorForTimestamp(ts, configsWithColors) {
+        let activeColor = CHART_PALETTE[0];
+        for (let i = 0; i < configsWithColors.length; i++) {
+            if (ts >= parseInt(configsWithColors[i].id)) {
+                activeColor = configsWithColors[i].color;
+            }
+        }
+        return activeColor;
+    }
+
+    function updateChartLegend(configsWithColors) {
+        const legend = document.getElementById('chartLegend');
+        if (!legend) return;
+        if (configsWithColors.length <= 1) {
+            legend.innerHTML = '';
+            return;
+        }
+        legend.innerHTML = configsWithColors.map(cfg => `
+            <div class="flex items-center gap-1">
+                <span class="w-2 h-2 rounded-full shadow-sm" style="background-color: ${cfg.color}"></span>
+                <span class="text-slate-400 font-mono tracking-tighter">ID:${cfg.id}</span>
+            </div>
+        `).join('');
+    }
+
+    function updateProjectionChart(bot_sorted_data) {
+        const ctx = document.getElementById('projectionChart');
+        if (!ctx) return;
+
+        // Si no hay datos, inicializar con estructura vacía
+        if (!bot_sorted_data || bot_sorted_data.length === 0) {
+            renderEmptyChart(ctx);
+            return;
+        }
+
+        // 1. Agrupar ganancias netas por mes usando los datos reales
+        const monthlyNet = new Map(); // key: 'YYYY-MM', value: net_profit
+        const monthlyTs = new Map(); // para guardar el ultimo timestamp del mes
+        
+        bot_sorted_data.forEach(row => {
+            const ts = parseInt(row.timestamp);
+            if (isNaN(ts)) return;
+            
+            const date = new Date(ts * 1000);
+            const yearMonth = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+            const amt = parseFloat(row.usdcAmount) || 0;
+            
+            if (!monthlyNet.has(yearMonth)) {
+                monthlyNet.set(yearMonth, 0);
+            }
+            monthlyTs.set(yearMonth, ts);
+            
+            // Si es Sell/Redeem suma (ganancia), si es Buy resta (costo)
+            let currentNet = monthlyNet.get(yearMonth);
+            if (row.action === 'Sell' || row.action === 'Redeem') {
+                monthlyNet.set(yearMonth, currentNet + amt);
+            } else if (row.action === 'Buy') {
+                monthlyNet.set(yearMonth, currentNet - amt);
+            }
+        });
+
+        // 2. Ordenar cronológicamente
+        const sortedMonths = Array.from(monthlyNet.keys()).sort();
+        
+        // 3. Generar etiquetas de los 12 meses del año actual
+        const currentYear = new Date().getFullYear();
+        const monthNames = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+        
+        const labels = monthNames;
+        const dataPoints = new Array(12).fill(null); // Null para meses sin datos (para que la línea se corte)
+
+        const configsWithColors = getConfigColors();
+        updateChartLegend(configsWithColors);
+        const pointColors = new Array(12).fill('#94a3b8');
+
+        // 4. Calcular el acumulado progresivo de los meses reales
+        let accumulated = 0;
+        let lastRealValueIndex = -1;
+
+        for (let i = 0; i < 12; i++) {
+            const yearMonthStr = `${currentYear}-${String(i + 1).padStart(2, '0')}`;
+            if (monthlyNet.has(yearMonthStr)) {
+                accumulated += monthlyNet.get(yearMonthStr);
+                dataPoints[i] = accumulated.toFixed(2);
+                lastRealValueIndex = i;
+                
+                const ts = monthlyTs.get(yearMonthStr);
+                pointColors[i] = getColorForTimestamp(ts, configsWithColors);
+            } else if (i < new Date().getMonth() && lastRealValueIndex !== -1) {
+                // Rellenar huecos en meses pasados donde no hubo actividad para mantener la línea plana
+                dataPoints[i] = accumulated.toFixed(2);
+                pointColors[i] = pointColors[i - 1]; // mantener el color anterior
+            }
+        }
+
+        const isPositive = accumulated >= 0;
+        const bgColor = isPositive ? 'rgba(52, 211, 153, 0.1)' : 'rgba(248, 113, 113, 0.1)';
+
+        if (projectionChartInstance) {
+            projectionChartInstance.data.labels = labels;
+            projectionChartInstance.data.datasets[0].data = dataPoints;
+            projectionChartInstance.data.datasets[0].pointBackgroundColor = pointColors;
+            projectionChartInstance.data.datasets[0].pointBorderColor = pointColors;
+            projectionChartInstance.data.datasets[0].backgroundColor = bgColor;
+            projectionChartInstance.data.datasets[0].segment = {
+                borderColor: ctx => pointColors[ctx.p1DataIndex] || pointColors[ctx.p0DataIndex] || '#34d399'
+            };
+            projectionChartInstance.update();
+        } else {
+            Chart.defaults.color = '#94a3b8';
+            Chart.defaults.font.size = 9;
+            Chart.defaults.font.family = 'ui-sans-serif, system-ui, sans-serif';
+
+            projectionChartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Beneficio Acumulado',
+                        data: dataPoints,
+                        backgroundColor: bgColor,
+                        borderWidth: 2,
+                        pointBackgroundColor: pointColors,
+                        pointBorderColor: pointColors,
+                        pointBorderWidth: 1.5,
+                        pointRadius: 3,
+                        pointHoverRadius: 4,
+                        fill: true,
+                        tension: 0.3,
+                        spanGaps: true, // Conectar puntos si hay meses intermedios vacíos
+                        segment: {
+                            borderColor: ctx => pointColors[ctx.p1DataIndex] || pointColors[ctx.p0DataIndex] || '#34d399'
+                        }
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    plugins: {
+                        legend: {
+                            display: false
+                        },
+                        tooltip: {
+                            backgroundColor: 'rgba(15, 23, 42, 0.9)',
+                            titleColor: '#e2e8f0',
+                            bodyColor: '#e2e8f0',
+                            borderColor: '#334155',
+                            borderWidth: 1,
+                            callbacks: {
+                                label: function(context) {
+                                    let label = context.dataset.label || '';
+                                    if (label) {
+                                        label += ': ';
+                                    }
+                                    if (context.parsed.y !== null) {
+                                        label += new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(context.parsed.y);
+                                    }
+                                    return label;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            grid: {
+                                color: '#334155',
+                                drawBorder: false,
+                                tickLength: 4
+                            },
+                            ticks: {
+                                maxRotation: 45,
+                                minRotation: 0
+                            }
+                        },
+                        y: {
+                            grid: {
+                                color: '#1e293b',
+                                drawBorder: false
+                            },
+                            ticks: {
+                                callback: function(value) {
+                                    return '$' + value;
+                                }
+                            }
+                        }
+                    },
+                    interaction: {
+                        intersect: false,
+                        mode: 'index',
+                    },
+                }
+            });
+        }
+    }
+
+    function renderEmptyChart(ctx) {
+        const labels = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+        const dataPoints = new Array(12).fill(null);
+        
+        if (projectionChartInstance) {
+            projectionChartInstance.data.labels = labels;
+            projectionChartInstance.data.datasets[0].data = dataPoints;
+            projectionChartInstance.update();
+        }
+        if (dailyChartInstance) {
+            dailyChartInstance.data.labels = [];
+            dailyChartInstance.data.datasets[0].data = [];
+            dailyChartInstance.update();
+        }
+    }
+
+    let currentChart = 'daily';
+
+    function openDetailedChart() {
+        window.open(`chart-detallado.html?type=${currentChart}`, '_blank');
+    }
+
+    function toggleChart() {
+        const dailyContainer = document.getElementById('dailyChartContainer');
+        const annualContainer = document.getElementById('annualChartContainer');
+        const perDayContainer = document.getElementById('perDayChartContainer');
+        const chartName = document.getElementById('chartName');
+        const chartIcon = document.getElementById('chartIcon');
+        const chartTitle = document.getElementById('chartTitle');
+
+        if (currentChart === 'daily') {
+            currentChart = 'perDay';
+            dailyContainer.classList.add('hidden');
+            perDayContainer.classList.remove('hidden');
+            chartName.innerText = 'Ganancias por Día (Mes Actual)';
+            chartIcon.innerText = '🗓️';
+            chartTitle.classList.remove('text-blue-400');
+            chartTitle.classList.add('text-emerald-400');
+        } else if (currentChart === 'perDay') {
+            currentChart = 'annual';
+            perDayContainer.classList.add('hidden');
+            annualContainer.classList.remove('hidden');
+            chartName.innerText = 'Beneficio Acumulado Mensual';
+            chartIcon.innerText = '📈';
+            chartTitle.classList.remove('text-emerald-400');
+            chartTitle.classList.add('text-purple-400');
+        } else {
+            currentChart = 'daily';
+            annualContainer.classList.add('hidden');
+            dailyContainer.classList.remove('hidden');
+            chartName.innerText = 'Beneficio Acumulado Diario';
+            chartIcon.innerText = '📊';
+            chartTitle.classList.remove('text-purple-400');
+            chartTitle.classList.add('text-blue-400');
+        }
+    }
+
+    function updateDailyChart(bot_sorted_data) {
+        const ctx = document.getElementById('dailyChart');
+        if (!ctx) return;
+
+        if (!bot_sorted_data || bot_sorted_data.length === 0) {
+            renderEmptyChart(document.getElementById('dailyChart'));
+            return;
+        }
+
+        let latestTs = 0;
+        bot_sorted_data.forEach(row => {
+            const ts = parseInt(row.timestamp);
+            if (!isNaN(ts) && ts > latestTs) latestTs = ts;
+        });
+
+        if (latestTs === 0) {
+            renderEmptyChart(document.getElementById('dailyChart'));
+            return;
+        }
+
+        const latestDateObj = new Date(latestTs * 1000);
+        const targetDateStr = `${latestDateObj.getFullYear()}-${latestDateObj.getMonth()}-${latestDateObj.getDate()}`;
+
+        const dailyNet = new Map();
+        const dailyTs = new Map();
+        
+        bot_sorted_data.forEach(row => {
+            const ts = parseInt(row.timestamp);
+            if (isNaN(ts)) return;
+            
+            const date = new Date(ts * 1000);
+            const rowDateStr = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+            
+            if (rowDateStr !== targetDateStr) return; // Solo procesar el último día con datos
+
+            const minutes = date.getMinutes();
+            const period = minutes < 30 ? '00' : '30';
+            const hourStr = `${String(date.getHours()).padStart(2, '0')}:${period}`;
+            
+            const amt = parseFloat(row.usdcAmount) || 0;
+            
+            if (!dailyNet.has(hourStr)) {
+                dailyNet.set(hourStr, 0);
+            }
+            dailyTs.set(hourStr, ts);
+            
+            let currentNet = dailyNet.get(hourStr);
+            if (row.action === 'Sell' || row.action === 'Redeem') {
+                dailyNet.set(hourStr, currentNet + amt);
+            } else if (row.action === 'Buy') {
+                dailyNet.set(hourStr, currentNet - amt);
+            }
+        });
+
+        document.getElementById('dailyChartDate').innerText = latestDateObj.toLocaleDateString('es-ES', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }).toUpperCase();
+
+        const sortedHours = Array.from(dailyNet.keys()).sort();
+        
+        const labels = [];
+        const dataPoints = [];
+        const pointColors = [];
+        const configsWithColors = getConfigColors();
+        
+        let accumulated = 0;
+
+        sortedHours.forEach(hour => {
+            labels.push(hour);
+            accumulated += dailyNet.get(hour);
+            dataPoints.push(accumulated.toFixed(2));
+            const ts = dailyTs.get(hour);
+            pointColors.push(getColorForTimestamp(ts, configsWithColors));
+        });
+
+        const isPositive = accumulated >= 0;
+        const bgColor = isPositive ? 'rgba(96, 165, 250, 0.1)' : 'rgba(248, 113, 113, 0.1)';
+
+        if (dailyChartInstance) {
+            dailyChartInstance.data.labels = labels;
+            dailyChartInstance.data.datasets[0].data = dataPoints;
+            dailyChartInstance.data.datasets[0].pointBackgroundColor = pointColors;
+            dailyChartInstance.data.datasets[0].pointBorderColor = pointColors;
+            dailyChartInstance.data.datasets[0].backgroundColor = bgColor;
+            dailyChartInstance.data.datasets[0].segment = {
+                borderColor: ctx => pointColors[ctx.p1DataIndex] || pointColors[ctx.p0DataIndex] || '#60a5fa'
+            };
+            dailyChartInstance.update();
+        } else {
+            dailyChartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Beneficio Acumulado',
+                        data: dataPoints,
+                        backgroundColor: bgColor,
+                        borderWidth: 2,
+                        pointBackgroundColor: pointColors,
+                        pointBorderColor: pointColors,
+                        pointBorderWidth: 1.5,
+                        pointRadius: 2,
+                        pointHoverRadius: 4,
+                        fill: true,
+                        tension: 0.2,
+                        segment: {
+                            borderColor: ctx => pointColors[ctx.p1DataIndex] || pointColors[ctx.p0DataIndex] || '#60a5fa'
+                        }
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            backgroundColor: 'rgba(15, 23, 42, 0.9)',
+                            titleColor: '#e2e8f0',
+                            bodyColor: '#e2e8f0',
+                            borderColor: '#334155',
+                            borderWidth: 1,
+                            callbacks: {
+                                label: function(context) {
+                                    let label = context.dataset.label || '';
+                                    if (label) label += ': ';
+                                    if (context.parsed.y !== null) {
+                                        label += new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(context.parsed.y);
+                                    }
+                                    return label;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            grid: { color: '#334155', drawBorder: false, tickLength: 4 },
+                            ticks: { maxRotation: 45, minRotation: 0 }
+                        },
+                        y: {
+                            grid: { color: '#1e293b', drawBorder: false },
+                            ticks: { callback: function(value) { return '$' + value; } }
+                        }
+                    },
+                    interaction: { intersect: false, mode: 'index' },
+                }
+            });
+        }
+    }
+
+    function updatePerDayChart(bot_sorted_data) {
+        const ctx = document.getElementById('perDayChart');
+        if (!ctx) return;
+
+        if (!bot_sorted_data || bot_sorted_data.length === 0) {
+            renderEmptyChart(ctx);
+            return;
+        }
+
+        let latestTs = 0;
+        bot_sorted_data.forEach(row => {
+            const ts = parseInt(row.timestamp);
+            if (!isNaN(ts) && ts > latestTs) latestTs = ts;
+        });
+
+        if (latestTs === 0) {
+            renderEmptyChart(ctx);
+            return;
+        }
+
+        const latestDateObj = new Date(latestTs * 1000);
+        const targetYear = latestDateObj.getFullYear();
+        const targetMonth = latestDateObj.getMonth();
+
+        const dailyProfits = new Map(); // key: 'DD', value: profit
+        
+        // Inicializar todos los días del mes hasta el día actual o fin de mes
+        const daysInMonth = new Date(targetYear, targetMonth + 1, 0).getDate();
+        for (let i = 1; i <= daysInMonth; i++) {
+            const dayStr = String(i).padStart(2, '0');
+            dailyProfits.set(dayStr, 0);
+        }
+
+        bot_sorted_data.forEach(row => {
+            const ts = parseInt(row.timestamp);
+            if (isNaN(ts)) return;
+            
+            const date = new Date(ts * 1000);
+            if (date.getFullYear() !== targetYear || date.getMonth() !== targetMonth) return;
+            
+            const dayStr = String(date.getDate()).padStart(2, '0');
+            const amt = parseFloat(row.usdcAmount) || 0;
+            
+            let currentProfit = dailyProfits.get(dayStr) || 0;
+            if (row.action === 'Sell' || row.action === 'Redeem') {
+                dailyProfits.set(dayStr, currentProfit + amt);
+            } else if (row.action === 'Buy') {
+                dailyProfits.set(dayStr, currentProfit - amt);
+            }
+        });
+
+        const labels = Array.from(dailyProfits.keys());
+        const dataPoints = Array.from(dailyProfits.values()).map(v => v.toFixed(2));
+        const bgColors = dataPoints.map(v => parseFloat(v) >= 0 ? 'rgba(34, 197, 94, 0.7)' : 'rgba(239, 68, 68, 0.7)');
+        const borderColors = dataPoints.map(v => parseFloat(v) >= 0 ? 'rgb(34, 197, 94)' : 'rgb(239, 68, 68)');
+
+        if (perDayChartInstance) {
+            perDayChartInstance.data.labels = labels;
+            perDayChartInstance.data.datasets[0].data = dataPoints;
+            perDayChartInstance.data.datasets[0].backgroundColor = bgColors;
+            perDayChartInstance.data.datasets[0].borderColor = borderColors;
+            perDayChartInstance.update();
+        } else {
+            perDayChartInstance = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Ganancia Diaria',
+                        data: dataPoints,
+                        backgroundColor: bgColors,
+                        borderColor: borderColors,
+                        borderWidth: 1,
+                        borderRadius: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    animation: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            backgroundColor: 'rgba(15, 23, 42, 0.9)',
+                            titleColor: '#e2e8f0',
+                            bodyColor: '#e2e8f0',
+                            borderColor: '#334155',
+                            borderWidth: 1,
+                            callbacks: {
+                                label: function(context) {
+                                    let label = context.dataset.label || '';
+                                    if (label) label += ': ';
+                                    if (context.parsed.y !== null) {
+                                        label += new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(context.parsed.y);
+                                    }
+                                    return label;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            grid: { color: '#334155', drawBorder: false },
+                            ticks: { color: '#94a3b8', font: { size: 10 } }
+                        },
+                        y: {
+                            grid: { color: '#1e293b', drawBorder: false },
+                            ticks: { 
+                                color: '#94a3b8',
+                                font: { size: 10 },
+                                callback: function(value) { return '$' + value; }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    function downloadDashboard() {
+            // Mostrar estado de carga opcional si es necesario
+            const btn = document.querySelector('button[onclick="downloadDashboard()"]');
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '⏳ Procesando...';
+            btn.disabled = true;
+
+            // Seleccionar el body o el contenedor principal para capturar
+            // html2canvas tiene mejor compatibilidad si capturamos el document.body en algunos casos de full-screen,
+            // pero le pasaremos configuraciones para ignorar el scroll.
+            html2canvas(document.body, {
+                backgroundColor: '#111827', // bg-gray-900
+                scale: 2, // Mejor calidad
+                logging: false,
+                useCORS: true,
+                ignoreElements: (element) => {
+                    // Ignorar la superposición de carga si está activa (aunque no debería)
+                    if (element.id === 'loading') return true;
+                    return false;
+                }
+            }).then(canvas => {
+                // Crear un enlace para descargar
+                const link = document.createElement('a');
+                link.download = `polymarket-dashboard-${new Date().toISOString().split('T')[0]}.jpg`;
+                // Convertir a JPEG con buena calidad (0.9)
+                link.href = canvas.toDataURL('image/jpeg', 0.9);
+                link.click();
+                
+                // Restaurar botón
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+            }).catch(err => {
+                console.error('Error al capturar la pantalla:', err);
+                alert('Hubo un error al intentar generar la imagen.');
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+            });
+        }
+        // === CONFIGURACIONES ===
+    function loadActiveConfig() {
+        let configs = JSON.parse(localStorage.getItem('botConfigs'));
+        if (!configs || configs.length === 0) {
+            configs = [{
+                id: '1774132800',
+                normal: 5,
+                trasPerdida: 50,
+                numTrasPerdida: 15,
+                salida: 25,
+                active: true
+            }];
+            localStorage.setItem('botConfigs', JSON.stringify(configs));
+        }
+        const active = configs.find(c => c.active) || configs[0];
+        
+        const elNormal = document.getElementById('cfg-normal');
+        if (elNormal) {
+            elNormal.innerText = `$${active.normal}`;
+            document.getElementById('cfg-tras-perdida').innerText = `$${active.trasPerdida}`;
+            document.getElementById('cfg-num-perdida').innerText = active.numTrasPerdida;
+            document.getElementById('cfg-salida').innerText = `${active.salida}%`;
+            document.getElementById('cfg-desde').innerText = active.id;
+            
+            // Format timestamp to date
+            const ts = parseInt(active.id);
+            if (!isNaN(ts)) {
+                const d = new Date(ts * 1000);
+                const day = String(d.getDate()).padStart(2, '0');
+                const month = String(d.getMonth() + 1).padStart(2, '0');
+                const year = d.getFullYear();
+                const hours = String(d.getHours()).padStart(2, '0');
+                const minutes = String(d.getMinutes()).padStart(2, '0');
+                const formattedDate = `${day}/${month}/${year} ${hours}:${minutes}`;
+                document.getElementById('cfg-desde-fecha').innerText = formattedDate;
+                
+                const coreBotIdEl = document.getElementById('core-bot-id');
+                if (coreBotIdEl) coreBotIdEl.innerText = `ID: ${active.id}`;
+                const coreBotDateEl = document.getElementById('core-bot-date');
+                if (coreBotDateEl) coreBotDateEl.innerText = formattedDate;
+            } else {
+                document.getElementById('cfg-desde-fecha').innerText = '--';
+                const coreBotIdEl = document.getElementById('core-bot-id');
+                if (coreBotIdEl) coreBotIdEl.innerText = `ID: ${active.id}`;
+                const coreBotDateEl = document.getElementById('core-bot-date');
+                if (coreBotDateEl) coreBotDateEl.innerText = '--';
+            }
+        }
+    }
+
+    // Inicializar configuración y mantener sincronizada
+    loadActiveConfig();
+    setInterval(loadActiveConfig, 2000);
+
+    // === FIN CONFIGURACIONES ===
+
+</script>
+</body>
+</html>

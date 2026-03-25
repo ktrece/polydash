@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Configuraciones - Polymarket Bot</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            background-color: #0f172a;
+            color: #e2e8f0;
+        }
+        /* Ocultar scrollbar pero permitir scroll interno */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #1f2937; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #374151; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #4b5563; 
+        }
+    </style>
+</head>
+<body class="p-6 max-w-5xl mx-auto">
+    <div class="flex items-center justify-between mb-8">
+        <h1 class="text-2xl font-bold text-teal-400 flex items-center gap-2 uppercase tracking-wider">
+            <span>⚙️</span> Gestor de Configuraciones
+        </h1>
+        <a href="index.html" class="text-sm text-slate-400 hover:text-white transition-colors flex items-center gap-1 bg-slate-800 px-3 py-1.5 rounded border border-slate-700">
+            <span>🏠</span> Volver al Dashboard
+        </a>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div class="flex flex-col gap-6">
+            <!-- Formulario -->
+            <div class="bg-[#1e293b] p-5 rounded-xl border border-slate-700 shadow-lg shrink-0">
+                <h2 class="text-xs font-bold text-slate-200 mb-5 uppercase tracking-wider flex items-center gap-1.5 border-b border-slate-700 pb-2">
+                    <span class="text-teal-400">➕</span> Nueva Configuración
+                </h2>
+                <form id="configForm" class="flex flex-col gap-4">
+                    <div>
+                        <label class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Operación de inicio (ID)</label>
+                        <input type="text" id="opId" placeholder="Ej: 1774132800" required class="w-full bg-[#0f172a] border border-slate-600 rounded p-2 text-sm text-white focus:border-teal-500 focus:outline-none transition-colors">
+                    </div>
+                    <div>
+                        <label class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Apuesta normal ($)</label>
+                        <input type="number" step="0.1" id="valNormal" placeholder="Ej: 5" required class="w-full bg-[#0f172a] border border-slate-600 rounded p-2 text-sm text-white focus:border-teal-500 focus:outline-none transition-colors">
+                    </div>
+                    <div>
+                        <label class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Apuesta tras pérdida ($)</label>
+                        <input type="number" step="0.1" id="valTrasPerdida" placeholder="Ej: 50" required class="w-full bg-[#0f172a] border border-slate-600 rounded p-2 text-sm text-white focus:border-teal-500 focus:outline-none transition-colors">
+                    </div>
+                    <div>
+                        <label class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">Num Apuestas tras pérdida</label>
+                        <input type="number" id="valNumPerdida" placeholder="Ej: 15" required class="w-full bg-[#0f172a] border border-slate-600 rounded p-2 text-sm text-white focus:border-teal-500 focus:outline-none transition-colors">
+                    </div>
+                    <div>
+                        <label class="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">% de salida</label>
+                        <input type="number" step="0.1" id="valSalida" placeholder="Ej: 25" required class="w-full bg-[#0f172a] border border-slate-600 rounded p-2 text-sm text-white focus:border-teal-500 focus:outline-none transition-colors">
+                    </div>
+                    <button type="submit" class="mt-2 bg-teal-600/20 border border-teal-500 hover:bg-teal-500 hover:text-black text-teal-400 font-bold py-2.5 rounded transition-colors text-xs uppercase tracking-wider">
+                        Guardar Configuración
+                    </button>
+                </form>
+            </div>
+
+            <!-- Comparación -->
+            <div class="bg-[#1e293b] p-5 rounded-xl border border-slate-700 shadow-lg flex-1" id="comparisonPanel">
+                <h2 class="text-xs font-bold text-slate-200 mb-5 uppercase tracking-wider flex items-center gap-1.5 border-b border-slate-700 pb-2">
+                    <span class="text-blue-400">📊</span> Comparación de Rendimiento
+                </h2>
+                <div id="comparisonContent" class="text-slate-400 text-xs text-center py-4">
+                    Cargando datos...
+                </div>
+            </div>
+        </div>
+
+        <!-- Lista de Configuraciones -->
+        <div class="lg:col-span-2 flex flex-col gap-4 overflow-y-auto pr-1" style="max-height: calc(100vh - 120px);" id="configList">
+            <!-- Las tarjetas se generarán aquí -->
+        </div>
+    </div>
+
+    <script>
+        // --- MANEJO DE ALMACENAMIENTO LOCAL (IndexedDB) ---
+        const dbName = 'PolymarketDB';
+        const storeName = 'csvData';
+
+        function initDB() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(dbName, 1);
+                request.onerror = event => reject("Error abriendo IndexedDB");
+                request.onsuccess = event => resolve(event.target.result);
+                request.onupgradeneeded = event => {
+                    const db = event.target.result;
+                    if (!db.objectStoreNames.contains(storeName)) {
+                        db.createObjectStore(storeName, { keyPath: 'id' });
+                    }
+                };
+            });
+        }
+
+        async function loadData() {
+            try {
+                const db = await initDB();
+                const tx = db.transaction(storeName, 'readonly');
+                const store = tx.objectStore(storeName);
+                const request = store.get('latest_data');
+                return new Promise((resolve, reject) => {
+                    request.onsuccess = () => resolve(request.result ? request.result.rows : null);
+                    request.onerror = () => reject("Error leyendo datos");
+                });
+            } catch (e) {
+                console.error("No se pudo cargar de IndexedDB", e);
+                return null;
+            }
+        }
+
+        // Cargar desde localStorage o inicializar con la por defecto
+        let configs = JSON.parse(localStorage.getItem('botConfigs'));
+        if (!configs || configs.length === 0) {
+            configs = [
+                { id: '1774132800', normal: 5, trasPerdida: 50, numTrasPerdida: 15, salida: 25, active: true }
+            ];
+            localStorage.setItem('botConfigs', JSON.stringify(configs));
+        }
+
+        function saveConfigs() {
+            localStorage.setItem('botConfigs', JSON.stringify(configs));
+            analyzeAndRender();
+        }
+
+        function formatDate(timestampStr) {
+            const ts = parseInt(timestampStr);
+            if (isNaN(ts)) return '--';
+            const d = new Date(ts * 1000);
+            const day = String(d.getDate()).padStart(2, '0');
+            const month = String(d.getMonth() + 1).padStart(2, '0');
+            const year = d.getFullYear();
+            const hours = String(d.getHours()).padStart(2, '0');
+            const minutes = String(d.getMinutes()).padStart(2, '0');
+            return `${day}/${month}/${year} ${hours}:${minutes}`;
+        }
+
+        function formatDetailedTime(seconds) {
+            if (seconds <= 0) return "0s";
+            const mo = Math.floor(seconds / (3600 * 24 * 30));
+            const d = Math.floor((seconds % (3600 * 24 * 30)) / (3600 * 24));
+            const h = Math.floor((seconds % (3600 * 24)) / 3600);
+            const m = Math.floor((seconds % 3600) / 60);
+            const s = Math.floor(seconds % 60);
+            
+            let res = [];
+            if (mo > 0) res.push(`${mo} meses`);
+            if (d > 0) res.push(`${d} días`);
+            if (h > 0) res.push(`${h} hrs`);
+            if (m > 0) res.push(`${m} min`);
+            if (s > 0) res.push(`${s} seg`);
+            return res.join(', ');
+        }
+
+        let configStats = {};
+
+        function getLossAnalysisHTML(losing_trades, total_trades, win_rate, lost_capital, max_drawdown, net_profit) {
+            let risk_level = "Bajo";
+            let risk_color = "text-emerald-400";
+            if (max_drawdown > 50) { risk_level = "Medio"; risk_color = "text-yellow-400"; }
+            if (max_drawdown > 150) { risk_level = "Alto"; risk_color = "text-orange-400"; }
+            if (max_drawdown > 300) { risk_level = "Crítico"; risk_color = "text-red-500"; }
+
+            let insights = [];
+            if (win_rate < 50 && total_trades > 0) {
+                insights.push("📉 <b class='text-slate-200'>Win Rate Crítico:</b> Acierto < 50%. Sugerencia: Endurecer filtros de entrada.");
+            } else if (total_trades > 0) {
+                insights.push("✅ <b class='text-slate-200'>Win Rate Saludable:</b> Acierto sólido.");
+            } else {
+                insights.push("⏳ <b class='text-slate-200'>Sin Datos:</b> Esperando operaciones.");
+            }
+
+            if (max_drawdown > (net_profit > 0 ? net_profit * 0.5 : 50) && total_trades > 0) {
+                insights.push("⚠️ <b class='text-slate-200'>Drawdown Elevado:</b> Rachas negativas agresivas.");
+            }
+
+            if (lost_capital > 100) {
+                insights.push("💡 <b class='text-slate-200'>Fuga de Capital:</b> Capital bloqueado en pérdidas.");
+            }
+
+            return `
+                <div class="mt-2 flex flex-col gap-2">
+                    <h3 class="text-[9px] font-bold text-orange-400 uppercase tracking-wider mb-0.5 flex items-center gap-1"><span class="leading-none">🕵️</span> Auditor Experto</h3>
+                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                        <div class="bg-[#0f172a] p-1.5 rounded-lg border border-slate-700 flex flex-col justify-center items-center shadow-inner">
+                            <span class="text-[8px] text-slate-400 uppercase tracking-wider">Fallidos</span>
+                            <span class="text-[10px] font-bold text-red-400">${losing_trades} <span class="text-[8px] text-slate-600">/ ${total_trades}</span></span>
+                        </div>
+                        <div class="bg-[#0f172a] p-1.5 rounded-lg border border-slate-700 flex flex-col justify-center items-center shadow-inner">
+                            <span class="text-[8px] text-slate-400 uppercase tracking-wider">Acierto</span>
+                            <span class="text-[10px] font-bold text-blue-400">${win_rate}%</span>
+                        </div>
+                        <div class="bg-[#0f172a] p-1.5 rounded-lg border border-slate-700 flex flex-col justify-center items-center shadow-inner">
+                            <span class="text-[8px] text-slate-400 uppercase tracking-wider">Peor Racha</span>
+                            <span class="text-[10px] font-bold ${risk_color}">-$${max_drawdown.toFixed(2)}</span>
+                        </div>
+                        <div class="bg-[#0f172a] p-1.5 rounded-lg border border-slate-700 flex flex-col justify-center items-center shadow-inner">
+                            <span class="text-[8px] text-slate-400 uppercase tracking-wider">Riesgo</span>
+                            <span class="text-[9px] font-bold ${risk_color} uppercase bg-slate-800 px-1 py-0.5 rounded border border-slate-700">${risk_level}</span>
+                        </div>
+                    </div>
+                    <div class="bg-blue-900/10 rounded border border-blue-800/30 p-1.5">
+                        <ul class="flex flex-col gap-1">
+                            ${insights.map(i => `<li class="text-[8px] leading-relaxed text-slate-300 border-b border-slate-700/50 pb-1 last:border-0 last:pb-0">${i}</li>`).join('')}
+                        </ul>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function analyzeAndRender() {
+            const data = await loadData();
+            if (data && data.length > 0) {
+                // sort configs by ID (timestamp) ascending
+                let sortedConfigs = [...configs].sort((a, b) => parseInt(a.id) - parseInt(b.id));
+                const nowTs = Math.floor(Date.now() / 1000);
+
+                for (let i = 0; i < sortedConfigs.length; i++) {
+                    const cfg = sortedConfigs[i];
+                    const startTs = parseInt(cfg.id);
+                    const endTs = (i + 1 < sortedConfigs.length) ? parseInt(sortedConfigs[i+1].id) : Infinity;
+                    
+                    let won = 0, lost = 0, elapsed = 0;
+                    let losing_trades = 0, winning_trades = 0;
+                    let max_drawdown = 0;
+                    let total_invested_in_losses = 0;
+                    
+                    const configData = data.filter(row => {
+                        const ts = parseInt(row.timestamp);
+                        return !isNaN(ts) && ts >= startTs && ts < endTs;
+                    }).sort((a, b) => parseInt(a.timestamp) - parseInt(b.timestamp));
+                    
+                    let markets = {};
+                    configData.forEach(row => {
+                        const mName = row.marketName;
+                        if (!markets[mName]) {
+                            markets[mName] = { cost: 0, redeem: 0, first_ts: parseInt(row.timestamp), last_ts: parseInt(row.timestamp) };
+                        }
+                        const amt = parseFloat(row.usdcAmount) || 0;
+                        if (row.action === 'Buy') {
+                            markets[mName].cost += amt;
+                            lost += amt;
+                        } else if (row.action === 'Sell' || row.action === 'Redeem') {
+                            markets[mName].redeem += amt;
+                            won += amt;
+                        }
+                        markets[mName].last_ts = Math.max(markets[mName].last_ts, parseInt(row.timestamp));
+                    });
+
+                    let realized_balance = 0;
+                    let peak_realized_balance = 0;
+                    
+                    const sorted_markets = Object.values(markets).sort((a, b) => a.last_ts - b.last_ts);
+                    
+                    sorted_markets.forEach(m => {
+                        const m_net = m.redeem - m.cost;
+                        realized_balance += m_net;
+                        
+                        if (realized_balance > peak_realized_balance) {
+                            peak_realized_balance = realized_balance;
+                        }
+                        
+                        const drawdown = peak_realized_balance - realized_balance;
+                        if (drawdown > max_drawdown) {
+                            max_drawdown = drawdown;
+                        }
+
+                        if (m_net < 0) {
+                            losing_trades++;
+                            total_invested_in_losses += m.cost;
+                        } else if (m_net > 0) {
+                            winning_trades++;
+                        }
+                    });
+                    
+                    const actualEndTs = (endTs === Infinity) ? nowTs : endTs;
+                    elapsed = actualEndTs - startTs;
+                    if (elapsed < 0) elapsed = 0;
+                    
+                    configStats[cfg.id] = { 
+                        won, 
+                        lost, 
+                        net: won - lost, 
+                        elapsed, 
+                        startTs, 
+                        endTs: actualEndTs,
+                        netPerHour: elapsed > 0 ? (won - lost) / (elapsed / 3600) : 0,
+                        netPerDay: elapsed > 0 ? (won - lost) / (elapsed / (3600 * 24)) : 0,
+                        netPerMonth: elapsed > 0 ? (won - lost) / (elapsed / (3600 * 24 * 30)) : 0,
+                        losing_trades,
+                        total_trades: winning_trades + losing_trades,
+                        win_rate: (winning_trades + losing_trades) > 0 ? ((winning_trades / (winning_trades + losing_trades)) * 100).toFixed(1) : 0,
+                        max_drawdown,
+                        total_invested_in_losses
+                    };
+                }
+            }
+            renderConfigs();
+            renderComparison();
+        }
+
+        function renderConfigs() {
+            const list = document.getElementById('configList');
+            list.innerHTML = '';
+            
+            configs.forEach((cfg, index) => {
+                const isActive = cfg.active;
+                const borderClass = isActive ? 'border-teal-500 shadow-[0_0_15px_rgba(20,184,166,0.15)] bg-[#1e293b]' : 'border-slate-700 bg-slate-800/50 opacity-80 hover:opacity-100';
+                const badge = isActive 
+                    ? `<span class="bg-teal-500 text-black text-[9px] font-black px-2 py-0.5 rounded uppercase tracking-wider">Activa</span>` 
+                    : `<button onclick="setActive(${index})" class="bg-slate-700 border border-slate-600 hover:bg-teal-500 hover:border-teal-500 hover:text-black text-white text-[9px] font-bold px-2 py-0.5 rounded uppercase tracking-wider transition-all">Activar</button>`;
+                
+                const stats = configStats[cfg.id];
+
+                list.innerHTML += `
+                    <div class="p-3 rounded-xl border ${borderClass} flex flex-col transition-all relative">
+                        ${isActive ? '<div class="absolute -left-[1px] top-3 bottom-3 w-[3px] bg-teal-500 rounded-r"></div>' : ''}
+                        
+                        <div class="flex justify-between items-center mb-2 pb-2 border-b border-slate-700/50">
+                            <div class="flex items-center gap-2">
+                                <span class="text-[9px] text-slate-400 uppercase tracking-wider">Operación</span>
+                                <div class="flex flex-col">
+                                    <span class="text-[10px] font-mono font-bold text-white bg-[#0f172a] px-1.5 py-0.5 rounded border border-slate-700 leading-none">${cfg.id}</span>
+                                    <span class="text-[8px] text-slate-500 font-medium tracking-wide mt-0.5 px-1">${formatDate(cfg.id)}</span>
+                                </div>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                ${badge}
+                                <button onclick="deleteConfig(${index})" class="text-red-400 hover:text-red-300 bg-red-400/10 hover:bg-red-400/20 p-1 rounded transition-colors" title="Eliminar Configuración">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"></path><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path></svg>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center mb-3">
+                            <div class="bg-[#0f172a] p-1.5 rounded-lg border border-slate-700 flex flex-col justify-center shadow-inner">
+                                <div class="text-[8px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">Apuesta Normal</div>
+                                <div class="text-[10px] font-black text-slate-200">$${cfg.normal}</div>
+                            </div>
+                            <div class="bg-[#0f172a] p-1.5 rounded-lg border border-slate-700 flex flex-col justify-center shadow-inner">
+                                <div class="text-[8px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">Tras Pérdida</div>
+                                <div class="text-[10px] font-black text-slate-200">$${cfg.trasPerdida}</div>
+                            </div>
+                            <div class="bg-[#0f172a] p-1.5 rounded-lg border border-slate-700 flex flex-col justify-center shadow-inner">
+                                <div class="text-[8px] font-bold text-slate-400 uppercase tracking-wider mb-0.5"># Apuestas</div>
+                                <div class="text-[10px] font-black text-slate-200">${cfg.numTrasPerdida}</div>
+                            </div>
+                            <div class="bg-[#0f172a] p-1.5 rounded-lg border border-slate-700 flex flex-col justify-center shadow-inner">
+                                <div class="text-[8px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">% Salida</div>
+                                <div class="text-[10px] font-black text-slate-200">${cfg.salida}%</div>
+                            </div>
+                        </div>
+                        
+                        <div class="pt-2 border-t border-slate-700/50 flex flex-col gap-2">
+                            <h3 class="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">Estadísticas de Ejecución</h3>
+                            <div class="grid grid-cols-2 gap-2">
+                                <div class="bg-[#0f172a] p-1.5 rounded border border-slate-700">
+                                    <div class="text-[8px] text-slate-500 uppercase font-bold mb-0.5">Tiempo Activo</div>
+                                    <div class="text-[10px] text-slate-300 font-medium">${stats ? formatDetailedTime(stats.elapsed) : '--'}</div>
+                                </div>
+                                <div class="bg-[#0f172a] p-1.5 rounded border border-slate-700">
+                                    <div class="text-[8px] text-slate-500 uppercase font-bold mb-0.5">Rendimiento Total</div>
+                                    <div class="text-[10px] font-black ${stats && stats.net >= 0 ? 'text-emerald-400' : 'text-red-400'}">
+                                        ${stats ? (stats.net >= 0 ? '+' : '') + '$' + stats.net.toFixed(2) : '--'}
+                                    </div>
+                                    <div class="text-[8px] text-slate-500 mt-0.5 font-medium tracking-wide">
+                                        <span class="text-emerald-400">G: $${stats ? stats.won.toFixed(2) : '0.00'}</span> | 
+                                        <span class="text-red-400">P: $${stats ? stats.lost.toFixed(2) : '0.00'}</span>
+                                    </div>
+                                </div>
+                            </div>
+                            ${stats ? getLossAnalysisHTML(stats.losing_trades, stats.total_trades, stats.win_rate, stats.total_invested_in_losses, stats.max_drawdown, stats.net) : ''}
+                        </div>
+                    </div>
+                `;
+            });
+        }
+
+        function renderComparison() {
+            const compDiv = document.getElementById('comparisonContent');
+            if (!compDiv) return;
+
+            const validStats = Object.values(configStats).filter(s => s.elapsed > 0);
+            if (validStats.length === 0) {
+                compDiv.innerHTML = '<div class="text-slate-500 text-xs text-center py-4">No hay datos suficientes para comparar.</div>';
+                return;
+            }
+
+            if (validStats.length === 1) {
+                compDiv.innerHTML = '<div class="text-slate-500 text-xs text-center py-4">Se necesitan al menos 2 configuraciones con datos para comparar.<br><br>Actualmente solo hay datos de 1 configuración.</div>';
+                return;
+            }
+
+            // Find bests
+            let bestNetPerHour = validStats.reduce((prev, current) => (prev.netPerHour > current.netPerHour) ? prev : current);
+            let bestNetPerDay = validStats.reduce((prev, current) => (prev.netPerDay > current.netPerDay) ? prev : current);
+            let bestNetPerMonth = validStats.reduce((prev, current) => (prev.netPerMonth > current.netPerMonth) ? prev : current);
+            let mostTimeActive = validStats.reduce((prev, current) => (prev.elapsed > current.elapsed) ? prev : current);
+            let mostLosses = validStats.reduce((prev, current) => (prev.lost > current.lost) ? prev : current);
+            
+            // helper to get ID
+            const getCfgId = (statsObj) => Object.keys(configStats).find(key => configStats[key] === statsObj) || '--';
+
+            compDiv.innerHTML = `
+                <div class="flex flex-col gap-3">
+                    <div class="bg-[#0f172a] p-2 rounded border border-slate-700 flex justify-between items-center">
+                        <span class="text-[9px] text-slate-400 uppercase tracking-wider font-bold">Ganancia / Hora</span>
+                        <div class="flex flex-col items-end">
+                            <span class="text-xs font-bold text-emerald-400">+$${bestNetPerHour.netPerHour.toFixed(2)}</span>
+                            <span class="text-[8px] text-slate-500 font-mono">ID: ${getCfgId(bestNetPerHour)}</span>
+                        </div>
+                    </div>
+                    <div class="bg-[#0f172a] p-2 rounded border border-slate-700 flex justify-between items-center">
+                        <span class="text-[9px] text-slate-400 uppercase tracking-wider font-bold">Ganancia / Día</span>
+                        <div class="flex flex-col items-end">
+                            <span class="text-xs font-bold text-emerald-400">+$${bestNetPerDay.netPerDay.toFixed(2)}</span>
+                            <span class="text-[8px] text-slate-500 font-mono">ID: ${getCfgId(bestNetPerDay)}</span>
+                        </div>
+                    </div>
+                    <div class="bg-[#0f172a] p-2 rounded border border-slate-700 flex justify-between items-center">
+                        <span class="text-[9px] text-slate-400 uppercase tracking-wider font-bold">Ganancia / Mes</span>
+                        <div class="flex flex-col items-end">
+                            <span class="text-xs font-bold text-emerald-400">+$${bestNetPerMonth.netPerMonth.toFixed(2)}</span>
+                            <span class="text-[8px] text-slate-500 font-mono">ID: ${getCfgId(bestNetPerMonth)}</span>
+                        </div>
+                    </div>
+                    <div class="bg-[#0f172a] p-2 rounded border border-slate-700 flex justify-between items-center">
+                        <span class="text-[9px] text-slate-400 uppercase tracking-wider font-bold">Más tiempo activo</span>
+                        <div class="flex flex-col items-end">
+                            <span class="text-xs font-bold text-blue-400">${formatDetailedTime(mostTimeActive.elapsed).split(',')[0]}</span>
+                            <span class="text-[8px] text-slate-500 font-mono">ID: ${getCfgId(mostTimeActive)}</span>
+                        </div>
+                    </div>
+                    <div class="bg-[#0f172a] p-2 rounded border border-slate-700 flex justify-between items-center">
+                        <span class="text-[9px] text-slate-400 uppercase tracking-wider font-bold">Más Pérdidas</span>
+                        <div class="flex flex-col items-end">
+                            <span class="text-xs font-bold text-red-400">-$${mostLosses.lost.toFixed(2)}</span>
+                            <span class="text-[8px] text-slate-500 font-mono">ID: ${getCfgId(mostLosses)}</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function setActive(index) {
+            configs.forEach((c, i) => c.active = (i === index));
+            saveConfigs();
+        }
+
+        function deleteConfig(index) {
+            if(configs.length <= 1) {
+                alert("No puedes eliminar la única configuración existente. Añade otra primero.");
+                return;
+            }
+            if(confirm("¿Estás seguro de eliminar esta configuración?")) {
+                const wasActive = configs[index].active;
+                configs.splice(index, 1);
+                if(wasActive && configs.length > 0) configs[0].active = true;
+                saveConfigs();
+            }
+        }
+
+        document.getElementById('configForm').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const newCfg = {
+                id: document.getElementById('opId').value,
+                normal: parseFloat(document.getElementById('valNormal').value),
+                trasPerdida: parseFloat(document.getElementById('valTrasPerdida').value),
+                numTrasPerdida: parseInt(document.getElementById('valNumPerdida').value),
+                salida: parseFloat(document.getElementById('valSalida').value),
+                active: true
+            };
+            
+            // Desactivar las anteriores
+            configs.forEach(c => c.active = false);
+            // Añadir al principio
+            configs.unshift(newCfg);
+            saveConfigs();
+            e.target.reset();
+        });
+
+        // Inicializar vista
+        analyzeAndRender();
+    </script>
+</body>
+</html>

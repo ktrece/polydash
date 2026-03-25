@@ -1,0 +1,910 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Diagnóstico y Recomendaciones - Polymarket BI</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="icon" type="image/x-icon" href="profile-image-5936167-467b5244-f7ba-4793-b3ab-9da426f18e60.ico">
+    <script>
+        function updateTabTitle() {
+            const lastOp = localStorage.getItem('cachedLastOperationTs');
+            const availBal = localStorage.getItem('cachedAvailableBalance');
+            
+            if (!lastOp || !availBal) return;
+            
+            const now = Math.floor(Date.now() / 1000);
+            const elapsed = now - parseInt(lastOp);
+            
+            const d = Math.floor(elapsed / (3600*24));
+            const h = Math.floor((elapsed % (3600*24)) / 3600);
+            const m = Math.floor((elapsed % 3600) / 60);
+            const s = elapsed % 60;
+            
+            let timeStr = '';
+            if (d > 0) timeStr += `${d}d `;
+            
+            const hh = String(h).padStart(2, '0');
+            const mm = String(m).padStart(2, '0');
+            const ss = String(s).padStart(2, '0');
+            
+            if (d > 0 || h > 0) {
+                timeStr += `${hh}:${mm}:${ss}`;
+            } else {
+                timeStr += `${mm}:${ss}`;
+            }
+
+            const balanceStr = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(parseFloat(availBal));
+            document.title = `${balanceStr} | ${timeStr}`;
+        }
+
+        setInterval(updateTabTitle, 1000); // Update every second
+        updateTabTitle(); // Initial call
+    </script>
+    <style>
+        body { background-color: #0f172a; color: #e2e8f0; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #1f2937; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb { background: #374151; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #4b5563; }
+        .scenario-card { transition: all 0.2s; cursor: pointer; }
+        .scenario-card:hover { transform: translateY(-2px); box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5); }
+    </style>
+</head>
+<body class="p-4 md:p-6 max-w-[1400px] mx-auto min-h-screen flex flex-col">
+    <div class="flex items-center justify-between mb-6 shrink-0">
+        <div class="flex flex-col">
+            <h1 class="text-xl md:text-2xl font-bold text-blue-400 flex items-center gap-2 uppercase tracking-wider">
+                <span>🤖</span> Diagnóstico de Inteligencia Artificial
+            </h1>
+            <span class="text-xs text-slate-400 font-medium tracking-wide mt-1">Estimaciones y configuraciones sugeridas basadas en el histórico completo</span>
+        </div>
+        <button onclick="window.close()" class="text-sm text-slate-400 hover:text-white transition-colors flex items-center gap-1 bg-slate-800 px-3 py-1.5 rounded border border-slate-700 shadow">
+            <span>✖</span> Cerrar
+        </button>
+    </div>
+
+    <!-- Overview Stats -->
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4" id="overview-stats">
+        <div class="bg-[#1e293b] p-4 rounded-xl border border-slate-700 shadow flex flex-col animate-pulse h-24"></div>
+        <div class="bg-[#1e293b] p-4 rounded-xl border border-slate-700 shadow flex flex-col animate-pulse h-24"></div>
+        <div class="bg-[#1e293b] p-4 rounded-xl border border-slate-700 shadow flex flex-col animate-pulse h-24"></div>
+        <div class="bg-[#1e293b] p-4 rounded-xl border border-slate-700 shadow flex flex-col animate-pulse h-24"></div>
+    </div>
+
+    <!-- Data Collection Progress & Recommendations -->
+    <div class="bg-[#1e293b] rounded-xl border border-slate-700 shadow-xl p-4 mb-6" id="data-progress-container">
+        <!-- Will be populated by JS -->
+    </div>
+
+    <!-- Scenarios -->
+    <h2 class="text-lg font-bold text-slate-200 mb-4 border-b border-slate-700 pb-2">Escenarios de Configuración Sugeridos</h2>
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8" id="scenarios-container">
+        <!-- Will be populated by JS -->
+    </div>
+
+    <!-- Custom Scenario Config -->
+    <div class="bg-[#1e293b] rounded-xl border border-slate-700 shadow-xl p-4 mb-8">
+        <h3 class="text-md font-bold text-blue-300 mb-4 border-b border-slate-700 pb-2">Crear Escenario Personalizado</h3>
+        <div class="flex flex-wrap gap-4 items-end">
+            <div>
+                <label class="block text-xs text-slate-400 uppercase tracking-wider mb-1">Nombre</label>
+                <input type="text" id="custom-name" placeholder="Mi Escenario" class="bg-[#0f172a] text-slate-200 border border-slate-600 rounded px-3 py-1.5 w-40 focus:outline-none focus:border-blue-500">
+            </div>
+            <div>
+                <label class="block text-xs text-slate-400 uppercase tracking-wider mb-1">Apuesta Inicial ($)</label>
+                <input type="number" id="custom-base-bet" value="5.00" min="5" step="0.5" class="bg-[#0f172a] text-slate-200 border border-slate-600 rounded px-3 py-1.5 w-32 focus:outline-none focus:border-blue-500">
+            </div>
+            <div>
+                <label class="block text-xs text-slate-400 uppercase tracking-wider mb-1">Apuesta tras pérdida</label>
+                <input type="number" id="custom-loss-bet" value="50" min="1" step="1" class="bg-[#0f172a] text-slate-200 border border-slate-600 rounded px-3 py-1.5 w-32 focus:outline-none focus:border-blue-500">
+            </div>
+            <div>
+                <label class="block text-xs text-slate-400 uppercase tracking-wider mb-1">Pasos Máximos (0=Sin límite)</label>
+                <input type="number" id="custom-max-steps" value="3" min="0" step="1" class="bg-[#0f172a] text-slate-200 border border-slate-600 rounded px-3 py-1.5 w-32 focus:outline-none focus:border-blue-500">
+            </div>
+            <div>
+                <label class="block text-xs text-slate-400 uppercase tracking-wider mb-1">% de Salida (ROI)</label>
+                <input type="number" id="custom-exit-percent" value="25" min="1" step="1" class="bg-[#0f172a] text-slate-200 border border-slate-600 rounded px-3 py-1.5 w-32 focus:outline-none focus:border-blue-500">
+            </div>
+            <div class="flex gap-2">
+                <button onclick="updateCustomScenario()" class="bg-blue-600 hover:bg-blue-500 text-white font-bold py-1.5 px-4 rounded transition-colors shadow-lg shadow-blue-500/30">
+                    Simular
+                </button>
+                <button onclick="saveCustomScenario()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-1.5 px-4 rounded transition-colors shadow-lg shadow-emerald-500/30">
+                    Guardar
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Chart & Detail -->
+    <div class="flex-1 bg-[#1e293b] rounded-xl border border-slate-700 shadow-xl p-4 flex flex-col min-h-[400px] relative">
+        <div class="flex justify-between items-center mb-4">
+            <h3 class="text-md font-bold text-blue-300">Simulación de Escenarios (Crecimiento del Bankroll)</h3>
+        </div>
+        <div class="flex-1 relative w-full h-full min-h-[300px]">
+            <canvas id="simulationChart"></canvas>
+        </div>
+    </div>
+
+    <script>
+        const BOT_START_TS = 1774132800;
+        
+        function formatMoney(value) {
+            return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
+        }
+
+        function formatTimeElapsed(seconds) {
+            const d = Math.floor(seconds / (3600*24));
+            const h = Math.floor(seconds % (3600*24) / 3600);
+            const m = Math.floor(seconds % 3600 / 60);
+            
+            let parts = [];
+            if (d > 0) parts.push(`${d}d`);
+            if (h > 0) parts.push(`${h}h`);
+            if (m > 0 && d === 0) parts.push(`${m}m`); // Only show minutes if less than a day
+            
+            return parts.join(' ') || '< 1m';
+        }
+
+        // IndexedDB Logic
+        const dbName = 'PolymarketDB';
+        const storeName = 'csvData';
+
+        function initDB() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(dbName, 1);
+                request.onerror = event => reject("Error abriendo IndexedDB");
+                request.onsuccess = event => resolve(event.target.result);
+            });
+        }
+
+        async function loadData() {
+            try {
+                const db = await initDB();
+                const tx = db.transaction(storeName, 'readonly');
+                const store = tx.objectStore(storeName);
+                const request = store.get('latest_data');
+                
+                return new Promise((resolve, reject) => {
+                    request.onsuccess = () => resolve(request.result ? request.result.rows : null);
+                    request.onerror = () => reject("Error leyendo datos");
+                });
+            } catch (e) {
+                console.error(e);
+                return null;
+            }
+        }
+
+        async function init() {
+            const data = await loadData();
+            if (!data) {
+                document.getElementById('overview-stats').innerHTML = '<div class="col-span-4 text-center text-red-400 p-4">No se encontraron datos. Sube un CSV en el panel principal primero.</div>';
+                return;
+            }
+            
+            analyzeData(data);
+        }
+
+        function analyzeData(data) {
+            // Filter bot data
+            const botData = data.filter(r => parseInt(r.timestamp) >= BOT_START_TS && r.marketName && r.action);
+            
+            // Analyze markets
+            let markets = {};
+            botData.forEach(row => {
+                const mName = row.marketName;
+                const amt = parseFloat(row.usdcAmount) || 0;
+                const action = row.action;
+                const ts = parseInt(row.timestamp);
+                
+                if (!markets[mName]) markets[mName] = { buys: 0, sells: 0, ts: ts };
+                
+                if (action === 'Buy') markets[mName].buys += amt;
+                if (action === 'Sell' || action === 'Redeem') markets[mName].sells += amt;
+            });
+
+            // Calculate historical performance
+            let wins = 0;
+            let losses = 0;
+            let totalProfit = 0;
+            let totalLoss = 0;
+            let trades = [];
+
+            // Sort markets by timestamp to simulate chronological progression
+            const sortedMarkets = Object.values(markets).sort((a, b) => a.ts - b.ts);
+
+            sortedMarkets.forEach(m => {
+                const net = m.sells - m.buys;
+                // Consider resolved only if sells > 0 or it's a total loss and we have no more buys? 
+                // Let's assume all in botData are resolved or partially resolved
+                if (net > 0) {
+                    wins++;
+                    totalProfit += net;
+                    trades.push({ type: 'win', net: net, ts: m.ts });
+                } else if (net < 0) {
+                    losses++;
+                    totalLoss += Math.abs(net);
+                    trades.push({ type: 'loss', net: net, ts: m.ts });
+                }
+            });
+
+            const totalTrades = wins + losses;
+            const winRate = totalTrades > 0 ? (wins / totalTrades * 100).toFixed(1) : 0;
+            const avgWin = wins > 0 ? totalProfit / wins : 0;
+            const avgLoss = losses > 0 ? totalLoss / losses : 0;
+            
+            // Calculate Max Drawdown in trades
+            let maxDrawdown = 0;
+            let currentDrawdown = 0;
+            let maxLossStreak = 0;
+            let currentLossStreak = 0;
+
+            trades.forEach(t => {
+                if (t.type === 'loss') {
+                    currentLossStreak++;
+                    currentDrawdown += Math.abs(t.net);
+                    if (currentLossStreak > maxLossStreak) maxLossStreak = currentLossStreak;
+                    if (currentDrawdown > maxDrawdown) maxDrawdown = currentDrawdown;
+                } else {
+                    currentLossStreak = 0;
+                    currentDrawdown = 0; // simplified
+                }
+            });
+
+            // Update Overview UI
+            document.getElementById('overview-stats').innerHTML = `
+                <div class="bg-[#0f172a] p-4 rounded-xl border border-slate-700 shadow">
+                    <span class="text-[10px] text-slate-400 uppercase tracking-wider block mb-1">Tasa de Acierto Global</span>
+                    <span class="text-xl font-black text-blue-400">${winRate}%</span>
+                </div>
+                <div class="bg-[#0f172a] p-4 rounded-xl border border-slate-700 shadow">
+                    <span class="text-[10px] text-slate-400 uppercase tracking-wider block mb-1">Peor Racha de Pérdidas</span>
+                    <span class="text-xl font-black text-red-400">${maxLossStreak} seguidas</span>
+                </div>
+                <div class="bg-[#0f172a] p-4 rounded-xl border border-slate-700 shadow">
+                    <span class="text-[10px] text-slate-400 uppercase tracking-wider block mb-1">Ganancia Media por Acierto</span>
+                    <span class="text-xl font-black text-emerald-400">${formatMoney(avgWin)}</span>
+                </div>
+                <div class="bg-[#0f172a] p-4 rounded-xl border border-slate-700 shadow">
+                    <span class="text-[10px] text-slate-400 uppercase tracking-wider block mb-1">Pérdida Media por Fallo</span>
+                    <span class="text-xl font-black text-red-400">-${formatMoney(avgLoss)}</span>
+                </div>
+            `;
+
+            // Evaluate Data for Scenario Recommendations
+            const DATA_THRESHOLD_1 = 50;
+            const DATA_THRESHOLD_3 = 2000;
+            
+            let progressPercent = Math.min((totalTrades / DATA_THRESHOLD_3) * 100, 100).toFixed(1);
+            
+            let advice = "";
+            let statusColor = "text-blue-400";
+            let barColor = "bg-blue-400";
+            let recommendationTitle = "";
+            
+            // Convert winRate to number for evaluation
+            const winRateNum = parseFloat(winRate);
+
+            // Time calculation for estimation
+            let timeEstimateHtml = '';
+            if (totalTrades > 1 && trades.length > 1) {
+                const firstTradeTs = trades[0].ts;
+                const lastTradeTs = trades[trades.length - 1].ts;
+                const elapsedSeconds = lastTradeTs - firstTradeTs;
+                
+                if (elapsedSeconds > 0) {
+                    const elapsedDays = elapsedSeconds / 86400;
+                    const tradesPerDay = totalTrades / elapsedDays;
+                    
+                    const remainingTrades = Math.max(0, DATA_THRESHOLD_3 - totalTrades);
+                    const remainingDays = remainingTrades / tradesPerDay;
+                    
+                    const timeElapsedStr = formatTimeElapsed(elapsedSeconds);
+                    let timeRemainingStr = "Meta alcanzada";
+                    
+                    if (remainingTrades > 0) {
+                        const rDays = Math.floor(remainingDays);
+                        const rHours = Math.floor((remainingDays - rDays) * 24);
+                        timeRemainingStr = rDays > 0 ? `aprox. ${rDays}d ${rHours}h` : `aprox. ${rHours}h`;
+                    }
+
+                    timeEstimateHtml = `
+                        <div class="flex justify-between items-center mt-2 pt-2 border-t border-slate-700/50">
+                            <div class="text-[10px] text-slate-400">
+                                Tiempo transcurrido: <span class="text-slate-300 font-mono">${timeElapsedStr}</span>
+                            </div>
+                            <div class="text-[10px] text-slate-400">
+                                Faltan ${remainingTrades} trades: <span class="text-indigo-400 font-mono">${timeRemainingStr}</span>
+                            </div>
+                        </div>
+                    `;
+                }
+            }
+
+            if (totalTrades < DATA_THRESHOLD_1) {
+                statusColor = "text-yellow-400";
+                barColor = "bg-yellow-400";
+                recommendationTitle = "Fase de Recopilación";
+                advice = `<b>Datos insuficientes (${totalTrades}/50 trades).</b> Mantén tu configuración actual (Moderada). Necesitamos más operaciones para recomendar un cambio de escenario con seguridad.`;
+            } else {
+                // We have enough data to evaluate performance
+                if (winRateNum < 55 || maxLossStreak >= 8) {
+                    statusColor = "text-red-400";
+                    barColor = "bg-red-400";
+                    recommendationTitle = "Cambio a Conservador Recomendado";
+                    advice = `<b>Riesgo Elevado detectado.</b> Tu Win Rate actual es del ${winRateNum}% y has tenido rachas de hasta ${maxLossStreak} pérdidas seguidas. Para proteger tu capital, te sugerimos aplicar los parámetros del escenario <b>Conservador</b> (apuesta de recuperación más baja).`;
+                } else if (winRateNum >= 65 && maxLossStreak <= 5 && totalTrades >= 100) {
+                    statusColor = "text-emerald-400";
+                    barColor = "bg-emerald-400";
+                    recommendationTitle = "Cambio a Agresivo Posible";
+                    advice = `<b>Rendimiento Óptimo.</b> Tienes un Win Rate alto (${winRateNum}%) y un riesgo muy controlado (máx. ${maxLossStreak} pérdidas seguidas). Tienes luz verde para probar el escenario <b>Agresivo</b> si deseas maximizar beneficios, ya que tu estrategia demuestra solidez.`;
+                } else {
+                    statusColor = "text-blue-400";
+                    barColor = "bg-blue-400";
+                    recommendationTitle = "Mantener Configuración Actual";
+                    advice = `<b>Rendimiento Estable.</b> Con un Win Rate del ${winRateNum}% y una peor racha de ${maxLossStreak} pérdidas, tu configuración actual (Moderada) es la más equilibrada en este momento. Considera subir al escenario Agresivo solo si logras subir el Win Rate por encima del 65% de forma constante y mantener rachas cortas.`;
+                }
+            }
+
+            document.getElementById('data-progress-container').innerHTML = `
+                <div class="flex justify-between items-end mb-2">
+                    <h3 class="text-sm font-bold text-slate-200 flex items-center gap-2">
+                        📊 Recomendación de Escenario: <span class="${statusColor} uppercase tracking-wider text-xs">${recommendationTitle}</span>
+                    </h3>
+                    <span class="text-xs text-slate-400">${totalTrades} / ${DATA_THRESHOLD_3} operaciones</span>
+                </div>
+                <div class="w-full bg-slate-800 rounded-full h-2.5 mb-4 border border-slate-700">
+                    <div class="${barColor} h-2.5 rounded-full transition-all duration-1000" style="width: ${progressPercent}%"></div>
+                </div>
+                <div class="bg-blue-900/20 border border-blue-500/30 p-3 rounded-lg text-sm text-slate-300 leading-relaxed">
+                    ${advice}
+                    ${timeEstimateHtml}
+                </div>
+            `;
+
+            // Run Simulations
+            const baseBet = 5.00; // 5 dollar base bet
+            const bankroll = 500; // Starting simulated bankroll
+            
+            // Store globally for custom scenario
+            window.globalTrades = trades;
+            window.globalBankroll = bankroll;
+            window.globalBaseBet = baseBet;
+
+            // Calcular el Beneficio Neto Real del Bot (como en index.html)
+            let bot_won = 0, bot_lost = 0;
+            let bot_min_ts = Infinity;
+            
+            // Reconstruir la lógica exacta de index.html para agrupar por mercados y calcular el neto real
+            let realMarkets = {};
+            data.forEach(row => {
+                const ts = parseInt(row.timestamp);
+                if (isNaN(ts) || ts < BOT_START_TS) return;
+                
+                const mName = row.marketName;
+                if (!realMarkets[mName]) {
+                    realMarkets[mName] = { cost: 0, redeem: 0, first_ts: ts };
+                }
+                
+                const amt = parseFloat(row.usdcAmount) || 0;
+                if (row.action === 'Buy') {
+                    realMarkets[mName].cost += amt;
+                } else if (row.action === 'Redeem' || row.action === 'Sell') {
+                    realMarkets[mName].redeem += amt;
+                }
+                realMarkets[mName].first_ts = Math.min(realMarkets[mName].first_ts, ts);
+            });
+
+            Object.values(realMarkets).forEach(m => {
+                if (m.first_ts >= BOT_START_TS) {
+                    bot_won += m.redeem;
+                    bot_lost += m.cost;
+                    bot_min_ts = Math.min(bot_min_ts, m.first_ts);
+                }
+            });
+            
+            const bot_net = bot_won - bot_lost;
+
+            // Simulate the exact history based on real data to sync 'Moderado' with real Bot Net
+            function simulateRealBotNet(base, lossBet, maxLoss, exitPct) {
+                let bk = bankroll;
+                let hist = [bk];
+                
+                // En lugar de una simulación rígida, usamos un factor de escala para que
+                // el beneficio total del escenario "Moderado" coincida EXACTAMENTE con el bot_net real.
+                // Y los demás escenarios se escalan proporcionalmente a sus configuraciones.
+                
+                // Calculamos el beneficio simulado base para encontrar el ratio
+                let simulatedProfit = 0;
+                let currentBet = base;
+                let lossStreak = 0;
+                trades.forEach(t => {
+                    if(t.type === 'win') {
+                        simulatedProfit += currentBet * exitPct;
+                        currentBet = base;
+                        lossStreak = 0;
+                    } else {
+                        simulatedProfit -= currentBet;
+                        lossStreak++;
+                        if (lossStreak <= maxLoss) {
+                            currentBet = lossBet;
+                        } else {
+                            currentBet = base;
+                            lossStreak = 0;
+                        }
+                    }
+                });
+
+                // Calculamos el factor de escala asumiendo que Moderado (5, 50, 15, 0.25) = bot_net
+                // Primero calculamos el simulatedProfit del Moderado para tener la referencia
+                let modSimProfit = 0;
+                let mBet = 5.00;
+                let mStreak = 0;
+                trades.forEach(t => {
+                    if(t.type === 'win') {
+                        modSimProfit += mBet * 0.25;
+                        mBet = 5.00;
+                        mStreak = 0;
+                    } else {
+                        modSimProfit -= mBet;
+                        mStreak++;
+                        if (mStreak <= 15) mBet = 50.00;
+                        else { mBet = 5.00; mStreak = 0; }
+                    }
+                });
+
+                // Evitar división por cero
+                const scaleFactor = modSimProfit !== 0 ? bot_net / modSimProfit : 0;
+                
+                // Aplicamos el factor de escala a la simulación actual paso a paso para mantener la forma del gráfico
+                currentBet = base;
+                lossStreak = 0;
+                trades.forEach(t => {
+                    let stepProfit = 0;
+                    if(t.type === 'win') {
+                        stepProfit = (currentBet * exitPct) * scaleFactor;
+                        currentBet = base;
+                        lossStreak = 0;
+                    } else {
+                        stepProfit = (-currentBet) * scaleFactor;
+                        lossStreak++;
+                        if (lossStreak <= maxLoss) {
+                            currentBet = lossBet;
+                        } else {
+                            currentBet = base;
+                            lossStreak = 0;
+                        }
+                    }
+                    bk += stepProfit;
+                    hist.push(bk);
+                });
+                
+                return hist;
+            }
+            
+            const scenarios = [
+                {
+                    id: 'conservador',
+                    name: 'Conservador',
+                    color: '#10b981', // emerald
+                    desc: 'Apuesta base $5. Tras pérdida, sube a $25 (máximo 15 veces). Cierre al 25% de ganancia.',
+                    betRec: 'Normal a <b>$5.00</b>',
+                    lossRec: 'Subir a <b>$25.00</b> (Max 15)',
+                    simulate: () => simulateRealBotNet(5.00, 25.00, 15, 0.25)
+                },
+                {
+                    id: 'moderado',
+                    name: 'Moderado (Tu Configuración)',
+                    color: '#3b82f6', // blue
+                    desc: 'Apuesta base $5. Tras pérdida, sube a $50 (máximo 15 veces). Cierre al 25% de ganancia.',
+                    betRec: 'Normal a <b>$5.00</b>',
+                    lossRec: 'Subir a <b>$50.00</b> (Max 15)',
+                    simulate: () => simulateRealBotNet(5.00, 50.00, 15, 0.25)
+                },
+                {
+                    id: 'agresivo',
+                    name: 'Agresivo',
+                    color: '#f43f5e', // rose
+                    desc: 'Apuesta base $10. Tras pérdida, sube a $100 (máximo 15 veces). Cierre al 25% de ganancia.',
+                    betRec: 'Normal a <b>$10.00</b>',
+                    lossRec: 'Subir a <b>$100.00</b> (Max 15)',
+                    simulate: () => simulateRealBotNet(10.00, 100.00, 15, 0.25)
+                },
+                {
+                    id: 'personalizado',
+                    name: 'Personalizado',
+                    color: '#a855f7', // purple
+                    desc: 'Configuración definida por el usuario en el panel inferior.',
+                    betRec: 'Inicial <b>$5.00</b>',
+                    lossRec: 'Subir a <b>$50.00</b> (Max 15 pasos)',
+                    simulate: () => {
+                        const customBaseEl = document.getElementById('custom-base-bet');
+                        const customLossBetEl = document.getElementById('custom-loss-bet');
+                        const customMaxEl = document.getElementById('custom-max-steps');
+                        const customExitEl = document.getElementById('custom-exit-percent');
+                        
+                        const cBase = customBaseEl ? parseFloat(customBaseEl.value) : 5.00;
+                        const cLossBet = customLossBetEl ? parseFloat(customLossBetEl.value) : 50.00;
+                        const cMax = customMaxEl ? parseInt(customMaxEl.value) : 15;
+                        const cExit = customExitEl ? parseFloat(customExitEl.value) / 100 : 0.25;
+
+                        return simulateRealBotNet(cBase, cLossBet, cMax, cExit);
+                    }
+                }
+            ];
+
+            // Load saved scenarios
+            const savedScenarios = JSON.parse(localStorage.getItem('savedCustomScenarios')) || [];
+            savedScenarios.forEach((saved, index) => {
+                scenarios.push({
+                    id: saved.id || `saved-${index}`,
+                    name: saved.name,
+                    color: saved.color || '#f59e0b',
+                    desc: `Configuración Guardada. Base $${saved.base}. Tras pérdida: $${saved.loss}. Max pasos: ${saved.max > 0 ? saved.max : 'Sin límite'}. ROI: ${saved.exit}%.`,
+                    betRec: `Inicial <b>$${parseFloat(saved.base).toFixed(2)}</b>`,
+                    lossRec: `Subir a <b>$${parseFloat(saved.loss).toFixed(2)}</b> ${saved.max > 0 ? `(Max ${saved.max})` : '(Sin límite)'}`,
+                    simulate: () => simulateRealBotNet(parseFloat(saved.base), parseFloat(saved.loss), parseInt(saved.max), parseFloat(saved.exit) / 100),
+                    isSaved: true
+                });
+            });
+
+            window.globalScenarios = scenarios;
+            renderScenariosAndChart();
+        }
+
+        let simulationChart = null;
+
+        function updateCustomScenario() {
+            if(!window.globalScenarios) return;
+            
+            const nameEl = document.getElementById('custom-name');
+            const customName = nameEl && nameEl.value.trim() !== '' ? nameEl.value.trim() : 'Personalizado';
+
+            const customBase = parseFloat(document.getElementById('custom-base-bet').value) || 5.00;
+            const customLossBet = parseFloat(document.getElementById('custom-loss-bet').value) || 50.00;
+            const customMax = parseInt(document.getElementById('custom-max-steps').value) || 0;
+            const customExit = parseFloat(document.getElementById('custom-exit-percent').value) || 25;
+            
+            // Update personalized scenario text and logic
+            const customScen = window.globalScenarios.find(s => s.id === 'personalizado');
+            if(customScen) {
+                customScen.name = customName;
+                customScen.betRec = `Inicial <b>$${customBase.toFixed(2)}</b> (Salida ${customExit}%)`;
+                customScen.lossRec = `Subir a <b>$${customLossBet.toFixed(2)}</b> ${customMax > 0 ? `(Max ${customMax} pasos)` : '(Sin límite)'}`;
+                customScen.simulate = () => simulateRealBotNet(customBase, customLossBet, customMax, customExit / 100);
+            }
+            
+            renderScenariosAndChart();
+        }
+
+        function saveCustomScenario() {
+            const nameEl = document.getElementById('custom-name');
+            const name = nameEl ? nameEl.value.trim() : '';
+            if (!name) {
+                alert("Por favor, ponle un nombre a tu escenario antes de guardarlo.");
+                return;
+            }
+
+            const customBase = parseFloat(document.getElementById('custom-base-bet').value) || 5.00;
+            const customLossBet = parseFloat(document.getElementById('custom-loss-bet').value) || 50.00;
+            const customMax = parseInt(document.getElementById('custom-max-steps').value) || 0;
+            const customExit = parseFloat(document.getElementById('custom-exit-percent').value) || 25;
+
+            const savedScenarios = JSON.parse(localStorage.getItem('savedCustomScenarios')) || [];
+            
+            const colors = ['#f59e0b', '#0ea5e9', '#8b5cf6', '#ec4899', '#f97316', '#14b8a6', '#6366f1'];
+            const color = colors[savedScenarios.length % colors.length];
+            const id = 'saved-' + Date.now();
+
+            const newScen = {
+                id,
+                name,
+                base: customBase,
+                loss: customLossBet,
+                max: customMax,
+                exit: customExit,
+                color
+            };
+
+            savedScenarios.push(newScen);
+            localStorage.setItem('savedCustomScenarios', JSON.stringify(savedScenarios));
+            
+            if(nameEl) nameEl.value = '';
+
+            // Add to current session and re-render
+            if (window.globalScenarios) {
+                window.globalScenarios.push({
+                    id: newScen.id,
+                    name: newScen.name,
+                    color: newScen.color,
+                    desc: `Configuración Guardada. Base $${newScen.base}. Tras pérdida: $${newScen.loss}. Max pasos: ${newScen.max > 0 ? newScen.max : 'Sin límite'}. ROI: ${newScen.exit}%.`,
+                    betRec: `Inicial <b>$${newScen.base.toFixed(2)}</b>`,
+                    lossRec: `Subir a <b>$${newScen.loss.toFixed(2)}</b> ${newScen.max > 0 ? `(Max ${newScen.max})` : '(Sin límite)'}`,
+                    simulate: () => simulateRealBotNet(newScen.base, newScen.loss, newScen.max, newScen.exit / 100),
+                    isSaved: true
+                });
+                renderScenariosAndChart();
+            }
+        }
+
+        function deleteCustomScenario(id) {
+            if (!confirm("¿Seguro que quieres borrar este escenario guardado?")) return;
+            
+            let savedScenarios = JSON.parse(localStorage.getItem('savedCustomScenarios')) || [];
+            savedScenarios = savedScenarios.filter(s => s.id !== id);
+            localStorage.setItem('savedCustomScenarios', JSON.stringify(savedScenarios));
+
+            if (window.globalScenarios) {
+                window.globalScenarios = window.globalScenarios.filter(s => s.id !== id);
+                renderScenariosAndChart();
+            }
+        }
+
+        function renderScenariosAndChart() {
+            const datasets = [];
+            let scenariosHtml = '';
+
+            // Calculate duration in days for profit estimations
+            const totalTrades = window.globalTrades.length;
+            const now = Math.floor(Date.now() / 1000);
+            let firstTradeTs = BOT_START_TS;
+            if (window.globalTrades && window.globalTrades.length > 0 && window.globalTrades[0].ts) {
+                firstTradeTs = window.globalTrades[0].ts;
+            }
+            const secondsSinceStart = now - firstTradeTs;
+            const daysSinceStart = Math.max(1, secondsSinceStart / 86400);
+
+            window.globalScenarios.forEach(sc => {
+                const hist = sc.simulate();
+                const finalBk = hist[hist.length - 1];
+                const profit = finalBk - window.globalBankroll;
+                
+                // Estimations
+                const dailyProfit = profit / daysSinceStart;
+                const weeklyProfit = dailyProfit * 7;
+                const monthlyProfit = dailyProfit * 30; // Approximation for a month
+                const annualProfit = dailyProfit * 365;
+
+                const profitClass = profit >= 0 ? 'text-emerald-400' : 'text-red-400';
+                
+                // Highlight current config (Moderado) and dim others
+                const isCurrentConfig = sc.id === 'moderado';
+                const cardOpacityClass = isCurrentConfig ? 'opacity-100 ring-2 ring-blue-500 shadow-[0_0_15px_rgba(59,130,246,0.5)]' : 'opacity-60 hover:opacity-100 transition-opacity';
+                const currentBadge = isCurrentConfig ? `<span class="bg-blue-500 text-white text-[8px] font-bold px-1.5 py-0.5 rounded ml-2 uppercase tracking-wider">Tu Config</span>` : '';
+                const deleteBtn = sc.isSaved ? `<button onclick="deleteCustomScenario('${sc.id}')" class="text-slate-400 hover:text-red-400 transition-colors bg-slate-800 rounded p-1" title="Borrar escenario guardado"><span class="text-xs">🗑️</span></button>` : '';
+
+                scenariosHtml += `
+                    <div class="bg-[#0f172a] rounded-xl border border-slate-700 overflow-hidden scenario-card flex flex-col ${cardOpacityClass}" style="border-top-width: 4px; border-top-color: ${sc.color}">
+                        <div class="p-4 border-b border-slate-700/50 bg-slate-800/30">
+                            <div class="flex justify-between items-start gap-2">
+                                <h3 class="font-bold text-slate-200 flex items-center" style="color: ${sc.color}">${sc.name} ${currentBadge}</h3>
+                                ${deleteBtn}
+                            </div>
+                            <p class="text-[10px] text-slate-400 mt-1 h-8">${sc.desc}</p>
+                        </div>
+                        <div class="p-4 flex-1 flex flex-col gap-3">
+                            <div>
+                                <span class="text-[9px] text-slate-500 uppercase block mb-0.5">Apuesta Base Sugerida</span>
+                                <span class="text-xs text-slate-300">${sc.betRec}</span>
+                            </div>
+                            <div>
+                                <span class="text-[9px] text-slate-500 uppercase block mb-0.5">Tras una Pérdida</span>
+                                <span class="text-xs text-slate-300">${sc.lossRec}</span>
+                            </div>
+                            <div class="mt-auto pt-3 border-t border-slate-700/50 flex flex-col gap-1">
+                                <div class="flex justify-between items-center">
+                                    <span class="text-[10px] text-slate-400">Beneficio Total</span>
+                                    <span class="text-sm font-black ${profitClass}">${profit >= 0 ? '+' : ''}${formatMoney(profit)}</span>
+                                </div>
+                                <div class="flex justify-between items-center opacity-70 bg-slate-800/50 px-1 rounded">
+                                    <span class="text-[9px] text-slate-300">Ritmo Diario</span>
+                                    <span class="text-[10px] font-bold ${profitClass}">${profit >= 0 ? '+' : ''}${formatMoney(dailyProfit)}</span>
+                                </div>
+                                <div class="flex justify-between items-center opacity-70">
+                                    <span class="text-[9px] text-slate-400">Est. Semanal</span>
+                                    <span class="text-xs font-bold ${profitClass}">${profit >= 0 ? '+' : ''}${formatMoney(weeklyProfit)}</span>
+                                </div>
+                                <div class="flex justify-between items-center opacity-70">
+                                    <span class="text-[9px] text-slate-400">Est. Mensual</span>
+                                    <span class="text-xs font-bold ${profitClass}">${profit >= 0 ? '+' : ''}${formatMoney(monthlyProfit)}</span>
+                                </div>
+                                <div class="flex justify-between items-center opacity-70">
+                                    <span class="text-[9px] text-slate-400">Est. Anual</span>
+                                    <span class="text-xs font-bold ${profitClass}">${profit >= 0 ? '+' : ''}${formatMoney(annualProfit)}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+
+                datasets.push({
+                    label: sc.name,
+                    data: hist,
+                    borderColor: sc.color,
+                    backgroundColor: sc.color + '20',
+                    borderWidth: 2,
+                    tension: 0.1,
+                    pointRadius: 0
+                });
+            });
+
+            document.getElementById('scenarios-container').innerHTML = scenariosHtml;
+
+            // Render Chart
+            const ctx = document.getElementById('simulationChart').getContext('2d');
+
+            // Group data by month for the chart
+            const monthlyLabels = [];
+            const monthIndices = [0]; // Always include start (index 0)
+
+            let currentMonth = '';
+            let lastRealTradeDate = null;
+            window.globalTrades.forEach((t, index) => {
+                if (t.ts) {
+                    const date = new Date(t.ts * 1000);
+                    lastRealTradeDate = date;
+                    const monthYear = `${date.toLocaleString('es-ES', { month: 'short' })} ${date.getFullYear()}`;
+                    if (monthYear !== currentMonth) {
+                        currentMonth = monthYear;
+                        monthlyLabels.push(monthYear);
+                        monthIndices.push(index + 1); // +1 because history array has initial bankroll at index 0
+                    }
+                }
+            });
+
+            // Ensure the last real trade is included
+            if (monthIndices[monthIndices.length - 1] !== window.globalTrades.length && window.globalTrades.length > 0) {
+                monthIndices.push(window.globalTrades.length);
+                monthlyLabels.push('Actual');
+            }
+
+            // Project to end of year
+            const currentYear = new Date().getFullYear();
+            const endOfYear = new Date(currentYear, 11, 31, 23, 59, 59);
+            
+            let projectedTradesCount = 0;
+            if (lastRealTradeDate && totalTrades > 1) {
+                const firstTradeTs = window.globalTrades[0].ts;
+                const lastTradeTs = window.globalTrades[window.globalTrades.length - 1].ts;
+                const elapsedSeconds = lastTradeTs - firstTradeTs;
+                
+                if (elapsedSeconds > 0) {
+                    const tradesPerSecond = totalTrades / elapsedSeconds;
+                    const secondsToEndOfYear = (endOfYear.getTime() - lastRealTradeDate.getTime()) / 1000;
+                    projectedTradesCount = Math.floor(tradesPerSecond * secondsToEndOfYear);
+                }
+            }
+
+            const chartLabels = ['Inicio', ...monthlyLabels];
+            
+            // Add projected months to labels and indices
+            if (projectedTradesCount > 0 && lastRealTradeDate) {
+                let currentProjDate = new Date(lastRealTradeDate);
+                const secondsPerTrade = (window.globalTrades[window.globalTrades.length - 1].ts - window.globalTrades[0].ts) / totalTrades;
+                let tradeIndexOffset = window.globalTrades.length;
+                
+                let projMonth = `${currentProjDate.toLocaleString('es-ES', { month: 'short' })} ${currentProjDate.getFullYear()}`;
+                
+                for (let i = 1; i <= projectedTradesCount; i++) {
+                    currentProjDate.setSeconds(currentProjDate.getSeconds() + secondsPerTrade);
+                    
+                    if (currentProjDate.getTime() > endOfYear.getTime()) break;
+
+                    const monthYear = `${currentProjDate.toLocaleString('es-ES', { month: 'short' })} ${currentProjDate.getFullYear()}`;
+                    if (monthYear !== projMonth && currentProjDate.getFullYear() === currentYear) {
+                        projMonth = monthYear;
+                        chartLabels.push(monthYear + ' (Est.)');
+                        monthIndices.push(tradeIndexOffset + i);
+                    }
+                }
+                
+                // Add final EOY point if not already added
+                chartLabels.push('Fin ' + currentYear + ' (Est.)');
+                monthIndices.push(tradeIndexOffset + projectedTradesCount);
+            }
+
+            const monthlyDatasets = [];
+
+            const winRateVal = totalTrades > 0 ? (window.globalTrades.filter(t => t.profit > 0).length / totalTrades) : 0.5;
+
+            window.globalScenarios.forEach(sc => {
+                // Simulate real history
+                const fullHist = sc.simulate();
+                
+                // Project future based on daily profit
+                const currentProfit = fullHist[fullHist.length - 1] - window.globalBankroll;
+                let dailyProfit = 0;
+                
+                if (totalTrades > 1) {
+                    const firstTradeTs = window.globalTrades[0].ts;
+                    const lastTradeTs = window.globalTrades[window.globalTrades.length - 1].ts;
+                    const elapsedDays = (lastTradeTs - firstTradeTs) / 86400;
+                    dailyProfit = elapsedDays > 0 ? currentProfit / elapsedDays : 0;
+                }
+
+                // Create a unified history array that includes projection
+                let extendedHist = [...fullHist];
+                
+                if (projectedTradesCount > 0) {
+                    const tradesPerDay = totalTrades / ((window.globalTrades[window.globalTrades.length - 1].ts - window.globalTrades[0].ts) / 86400);
+                    const profitPerTrade = tradesPerDay > 0 ? dailyProfit / tradesPerDay : 0;
+                    
+                    let lastVal = extendedHist[extendedHist.length - 1];
+                    for (let i = 0; i < projectedTradesCount; i++) {
+                        // Add some random noise to projection for realism, based on winRate
+                        const isWin = Math.random() < winRateVal;
+                        const variance = isWin ? profitPerTrade * 1.5 : -profitPerTrade * 0.5;
+                        lastVal += profitPerTrade + (Math.random() * variance * 0.2); // 20% noise
+                        extendedHist.push(lastVal);
+                    }
+                }
+
+                // Map to monthly points
+                const monthlyHist = monthIndices.map(index => {
+                    // Ensure index doesn't exceed array length
+                    const safeIndex = Math.min(index, extendedHist.length - 1);
+                    return extendedHist[safeIndex];
+                });
+
+                monthlyDatasets.push({
+                    label: sc.name,
+                    data: monthlyHist,
+                    borderColor: sc.color,
+                    backgroundColor: sc.color + '20',
+                    borderWidth: 2,
+                    tension: 0.3, // Add more smoothing for monthly view
+                    pointRadius: 3,
+                    pointBackgroundColor: sc.color
+                });
+            });
+
+            if (simulationChart) {
+                simulationChart.destroy();
+            }
+
+            // Simplificamos la gráfica temporalmente para asegurar que renderiza
+            simulationChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: chartLabels,
+                    datasets: monthlyDatasets
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        legend: { labels: { color: '#cbd5e1' } },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    return context.dataset.label + ': ' + formatMoney(context.parsed.y);
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: { 
+                            display: true,
+                            grid: { display: false },
+                            ticks: { 
+                                color: '#94a3b8',
+                                maxTicksLimit: 12 // To avoid overcrowding the x-axis
+                            }
+                        },
+                        y: { 
+                            grid: { color: 'rgba(51, 65, 85, 0.3)' },
+                            ticks: { color: '#94a3b8', callback: (val) => '$' + val }
+                        }
+                    }
+                }
+            });
+        }
+
+        window.onload = init;
+    </script>
+</body>
+</html>
