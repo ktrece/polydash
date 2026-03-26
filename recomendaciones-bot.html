@@ -485,6 +485,10 @@
                 return hist;
             }
             
+            // Make simulateRealBotNet available globally
+            window.simulateRealBotNet = simulateRealBotNet;
+            window.bot_net = bot_net;
+            
             const scenarios = [
                 {
                     id: 'conservador',
@@ -493,7 +497,7 @@
                     desc: 'Apuesta base $5. Tras pérdida, sube a $25 (máximo 15 veces). Cierre al 25% de ganancia.',
                     betRec: 'Normal a <b>$5.00</b>',
                     lossRec: 'Subir a <b>$25.00</b> (Max 15)',
-                    simulate: () => simulateRealBotNet(5.00, 25.00, 15, 0.25)
+                    simulate: () => window.simulateRealBotNet(5.00, 25.00, 15, 0.25)
                 },
                 {
                     id: 'moderado',
@@ -502,7 +506,7 @@
                     desc: 'Apuesta base $5. Tras pérdida, sube a $50 (máximo 15 veces). Cierre al 25% de ganancia.',
                     betRec: 'Normal a <b>$5.00</b>',
                     lossRec: 'Subir a <b>$50.00</b> (Max 15)',
-                    simulate: () => simulateRealBotNet(5.00, 50.00, 15, 0.25)
+                    simulate: () => window.simulateRealBotNet(5.00, 50.00, 15, 0.25)
                 },
                 {
                     id: 'agresivo',
@@ -511,7 +515,7 @@
                     desc: 'Apuesta base $10. Tras pérdida, sube a $100 (máximo 15 veces). Cierre al 25% de ganancia.',
                     betRec: 'Normal a <b>$10.00</b>',
                     lossRec: 'Subir a <b>$100.00</b> (Max 15)',
-                    simulate: () => simulateRealBotNet(10.00, 100.00, 15, 0.25)
+                    simulate: () => window.simulateRealBotNet(10.00, 100.00, 15, 0.25)
                 },
                 {
                     id: 'personalizado',
@@ -531,7 +535,7 @@
                         const cMax = customMaxEl ? parseInt(customMaxEl.value) : 15;
                         const cExit = customExitEl ? parseFloat(customExitEl.value) / 100 : 0.25;
 
-                        return simulateRealBotNet(cBase, cLossBet, cMax, cExit);
+                        return window.simulateRealBotNet(cBase, cLossBet, cMax, cExit);
                     }
                 }
             ];
@@ -546,7 +550,7 @@
                     desc: `Configuración Guardada. Base $${saved.base}. Tras pérdida: $${saved.loss}. Max pasos: ${saved.max > 0 ? saved.max : 'Sin límite'}. ROI: ${saved.exit}%.`,
                     betRec: `Inicial <b>$${parseFloat(saved.base).toFixed(2)}</b>`,
                     lossRec: `Subir a <b>$${parseFloat(saved.loss).toFixed(2)}</b> ${saved.max > 0 ? `(Max ${saved.max})` : '(Sin límite)'}`,
-                    simulate: () => simulateRealBotNet(parseFloat(saved.base), parseFloat(saved.loss), parseInt(saved.max), parseFloat(saved.exit) / 100),
+                    simulate: () => window.simulateRealBotNet(parseFloat(saved.base), parseFloat(saved.loss), parseInt(saved.max), parseFloat(saved.exit) / 100),
                     isSaved: true
                 });
             });
@@ -574,7 +578,9 @@
                 customScen.name = customName;
                 customScen.betRec = `Inicial <b>$${customBase.toFixed(2)}</b> (Salida ${customExit}%)`;
                 customScen.lossRec = `Subir a <b>$${customLossBet.toFixed(2)}</b> ${customMax > 0 ? `(Max ${customMax} pasos)` : '(Sin límite)'}`;
-                customScen.simulate = () => simulateRealBotNet(customBase, customLossBet, customMax, customExit / 100);
+                // Fixed: simulateRealBotNet expects exit percent as decimal, so we pass customExit / 100
+                // We exposed simulateRealBotNet globally
+                customScen.simulate = () => window.simulateRealBotNet(customBase, customLossBet, customMax, customExit / 100);
             }
             
             renderScenariosAndChart();
@@ -623,7 +629,7 @@
                     desc: `Configuración Guardada. Base $${newScen.base}. Tras pérdida: $${newScen.loss}. Max pasos: ${newScen.max > 0 ? newScen.max : 'Sin límite'}. ROI: ${newScen.exit}%.`,
                     betRec: `Inicial <b>$${newScen.base.toFixed(2)}</b>`,
                     lossRec: `Subir a <b>$${newScen.loss.toFixed(2)}</b> ${newScen.max > 0 ? `(Max ${newScen.max})` : '(Sin límite)'}`,
-                    simulate: () => simulateRealBotNet(newScen.base, newScen.loss, newScen.max, newScen.exit / 100),
+                    simulate: () => window.simulateRealBotNet(newScen.base, newScen.loss, newScen.max, newScen.exit / 100),
                     isSaved: true
                 });
                 renderScenariosAndChart();

@@ -594,21 +594,61 @@
             return res.join(' ');
         }
 
+        // Obtener mercados ignorados
+        let ignored_markets = [];
+        try {
+            ignored_markets = JSON.parse(localStorage.getItem('ignoredMarkets')) || [];
+        } catch(e) {}
+
+        function toggleIgnoreMarket(marketName, event) {
+            if(event) event.stopPropagation();
+            let ignored = [];
+            try {
+                ignored = JSON.parse(localStorage.getItem('ignoredMarkets')) || [];
+            } catch(e) {}
+            
+            if (ignored.includes(marketName)) {
+                ignored = ignored.filter(m => m !== marketName);
+            } else {
+                ignored.push(marketName);
+            }
+            localStorage.setItem('ignoredMarkets', JSON.stringify(ignored));
+            if(window.lastAnalyzedData) analyzeData(window.lastAnalyzedData);
+        }
+        window.toggleIgnoreMarket = toggleIgnoreMarket;
+
+        function restoreIgnoredMarkets() {
+            if(confirm('¿Restaurar todas las pérdidas ignoradas?')) {
+                localStorage.setItem('ignoredMarkets', JSON.stringify([]));
+                if(window.lastAnalyzedData) analyzeData(window.lastAnalyzedData);
+            }
+        }
+        window.restoreIgnoredMarkets = restoreIgnoredMarkets;
+
         function analyzeData(data) {
             let max_ts = 0;
             let markets = {};
+            
+            // Obtener lista actual de ignorados
+            try {
+                ignored_markets = JSON.parse(localStorage.getItem('ignoredMarkets')) || [];
+            } catch(e) {
+                ignored_markets = [];
+            }
             
             // Timestamp de inicio del bot (1774132800)
             const BOT_START_TS = 1774132800;
 
             // Paso 1: Agrupar todas las transacciones por mercado
             data.forEach(row => {
+                const mName = row.marketName;
+                if (ignored_markets.includes(mName)) return; // Ignorar mercado completamente
+                
                 const ts = parseInt(row.timestamp);
                 if (isNaN(ts)) return; 
                 
                 if (ts > max_ts) max_ts = ts;
 
-                const mName = row.marketName;
                 if (!markets[mName]) {
                     markets[mName] = { cost: 0, redeem: 0, buys: 0, first_ts: ts, last_ts: ts };
                 }
@@ -825,19 +865,30 @@
             if (resultsDiv.innerHTML.includes('Sube tu archivo CSV')) {
                 resultsDiv.innerHTML = '';
             }
-
+            
             // --- CÁLCULO PERIODOS GENERALES ---
             periods.forEach(p => {
                 let won = 0, lost = 0, buys = 0;
                 let min_ts_period = Infinity, max_ts_period = 0;
 
-                Object.values(markets).forEach(m => {
-                    if (m.last_ts >= p.min_ts && m.last_ts < p.max_ts) {
-                        won += m.redeem;
-                        lost += m.cost;
-                        buys += m.buys;
-                        min_ts_period = Math.min(min_ts_period, m.first_ts);
-                        max_ts_period = Math.max(max_ts_period, m.last_ts);
+                // Nueva lógica: calcular beneficio transacción por transacción para que coincida con la gráfica
+                data.forEach(row => {
+                    const mName = row.marketName;
+                    if (ignored_markets.includes(mName)) return; // Ignorar mercado completamente
+                    
+                    const ts = parseInt(row.timestamp);
+                    if (isNaN(ts)) return;
+                    
+                    if (ts >= p.min_ts && ts < p.max_ts) {
+                        const amt = parseFloat(row.usdcAmount) || 0;
+                        if (row.action === 'Buy') {
+                            lost += amt;
+                            buys += 1;
+                        } else if (row.action === 'Redeem' || row.action === 'Sell') {
+                            won += amt;
+                        }
+                        min_ts_period = Math.min(min_ts_period, ts);
+                        max_ts_period = Math.max(max_ts_period, ts);
                     }
                 });
 
@@ -928,9 +979,9 @@
             let peak_realized_balance = 0;
             
             // Recorremos los mercados del bot ordenados por su última transacción
-            const sorted_bot_markets = Object.values(markets).filter(m => m.first_ts >= BOT_START_TS).sort((a, b) => a.last_ts - b.last_ts);
+            const sorted_bot_markets = Object.entries(markets).filter(([mName, m]) => m.first_ts >= BOT_START_TS && !ignored_markets.includes(mName)).sort((a, b) => a[1].last_ts - b[1].last_ts);
             
-            sorted_bot_markets.forEach(m => {
+            sorted_bot_markets.forEach(([mName, m]) => {
                 const m_net = m.redeem - m.cost;
                 realized_balance += m_net;
                 
@@ -944,7 +995,9 @@
                 }
             });
 
-            Object.values(markets).forEach(m => {
+            Object.entries(markets).forEach(([mName, m]) => {
+                if (ignored_markets.includes(mName)) return; // Ignorar en total bot
+                
                 // Consideramos que un mercado fue operado por el bot si su primera actividad es >= BOT_START_TS
                 if (m.first_ts >= BOT_START_TS) {
                     bot_won += m.redeem;
@@ -977,9 +1030,14 @@
             const total_resolved_trades = bot_losing_trades + bot_winning_trades;
             const win_rate = total_resolved_trades > 0 ? ((bot_winning_trades / total_resolved_trades) * 100).toFixed(1) : 0;
 
+            // Calcular Portfolio (Global)
+            calculatePortfolioBalance(data);
+
             // Encontrar el peor mercado (para mostrar en el Beneficio Neto si hay pérdida general)
             let worst_market = null;
             Object.entries(markets).forEach(([name, m]) => {
+                if (ignored_markets.includes(name)) return;
+                
                 if (m.first_ts >= BOT_START_TS) {
                     const m_net = m.redeem - m.cost;
                     if (m_net < 0 && (!worst_market || m_net < worst_market.net)) {
@@ -1040,7 +1098,7 @@
             // --- ANÁLISIS DE PÉRDIDAS (NUEVO) ---
             // Recopilar mercados fallidos para mostrarlos en el auditor experto
             const losing_markets = Object.entries(markets)
-                .filter(([name, m]) => m.first_ts >= BOT_START_TS && (m.redeem - m.cost) < -0.001)
+                .filter(([name, m]) => !ignored_markets.includes(name) && m.first_ts >= BOT_START_TS && (m.redeem - m.cost) < -0.001)
                 .map(([name, m]) => ({ 
                     name: (name === 'undefined' || !name) ? new Date(m.first_ts * 1000).toLocaleString('es-ES', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : name, 
                     realName: name,
@@ -1076,8 +1134,11 @@
 
             // --- PROYECCIONES BASADAS EN EL BOT ---
             window.bot_net = bot_net; // Guardar globalmente para refresco automático
-        renderBotProjections(bot_net, bot_elapsed, bot_sorted_data);
-    }
+            
+            // Filtrar los datos ordenados para que no incluyan los ignorados en el chart
+            const bot_filtered_sorted_data = bot_sorted_data.filter(row => !ignored_markets.includes(row.marketName));
+            renderBotProjections(bot_net, bot_elapsed, bot_filtered_sorted_data);
+        }
 
         function renderLossAnalysis(losing_trades, total_trades, win_rate, lost_capital, max_drawdown, net_profit, losing_markets = []) {
         let risk_level = "Bajo";
@@ -1110,6 +1171,7 @@
                 <div class="flex flex-col md:flex-row md:justify-between md:items-center gap-2">
                     <span class="text-[14px] md:text-[9px] text-slate-300 truncate pr-2 leading-tight group-hover:text-white transition-colors" title="${m.name}">${m.name}</span>
                     <div class="flex items-center justify-between md:justify-end gap-3 md:gap-2 shrink-0">
+                        <button onclick="toggleIgnoreMarket('${m.realName.replace(/'/g, "\\'")}', event)" class="text-[12px] md:text-[9px] bg-slate-800 text-slate-400 hover:bg-red-900/30 hover:text-red-300 px-2 py-1 md:px-1.5 md:py-0.5 rounded border border-slate-700/50 flex items-center justify-center min-h-[44px] md:min-h-0 transition-colors" title="Ignorar pérdida">🗑️</button>
                         <button onclick="event.stopPropagation(); window.open('${'https://polymarket.com/event/btc-updown-5m-' + (Math.floor(m.first_ts / 300) * 300 + 300)}', '_blank')" class="text-[12px] md:text-[9px] bg-blue-900/30 text-blue-300 hover:bg-blue-900/50 hover:text-blue-200 px-3 py-2 md:px-1.5 md:py-0.5 rounded border border-blue-700/50 flex items-center justify-center min-h-[44px] md:min-h-0">↗</button>
                         <span class="text-[9px] font-bold text-red-400 shrink-0">-$${Math.abs(m.net).toFixed(2)}</span>
                     </div>
@@ -1117,10 +1179,18 @@
             </a>
         `).join('');
 
-        const losers_section = losing_markets.length > 0 ? `
+        let ignored_count = 0;
+        try {
+            ignored_count = (JSON.parse(localStorage.getItem('ignoredMarkets')) || []).length;
+        } catch(e) {}
+        
+        const restoreBtn = ignored_count > 0 ? `<button onclick="restoreIgnoredMarkets()" class="text-[10px] text-slate-500 hover:text-slate-300 flex items-center gap-1 transition-colors" title="Restaurar ${ignored_count} pérdidas ignoradas">🕒 Restaurar (${ignored_count})</button>` : '';
+
+        const losers_section = (losing_markets.length > 0 || ignored_count > 0) ? `
             <div class="mt-2 flex flex-col gap-1.5 shrink-0">
                 <div class="flex justify-between items-center px-1">
                     <span class="text-[8px] text-slate-400 uppercase tracking-wider font-bold">Peores Pérdidas (Click para detalles)</span>
+                    ${restoreBtn}
                 </div>
                 ${top_losers_html}
             </div>
@@ -1168,13 +1238,13 @@
     }
 
     function resetBalanceCalibration() {
-        const newPortfolio = prompt("Introduce tu Saldo 'Portfolio' actual (ej. 697.95):", "697.95");
+        const newPortfolio = prompt("Introduce tu Saldo 'Portfolio' actual (ej. 1018.11):", "1018.11");
         if (newPortfolio === null) return;
         
-        const newAvailable = prompt("Introduce tu Saldo 'Available to trade' actual (ej. 697.67):", "697.67");
+        const newAvailable = prompt("Introduce tu Saldo 'Available to trade' actual (ej. 1018.00):", "1018.00");
         if (newAvailable === null) return;
 
-        const newDesfase = prompt("Introduce el desfase (dinero retenido o no trackeado) actual (ej. 0.28):", "0.28");
+        const newDesfase = prompt("Introduce el desfase (dinero retenido o no trackeado) actual (ej. 0):", "0");
         if (newDesfase === null) return;
         
         const p = parseFloat(newPortfolio.replace(',', '.'));
@@ -1188,6 +1258,19 @@
         } else {
             alert("Por favor, introduce números válidos.");
         }
+    }
+
+    function getActiveConfigForTimestamp(ts) {
+        const configs = JSON.parse(localStorage.getItem('botConfigs')) || [];
+        const sortedConfigs = [...configs].sort((a, b) => parseInt(b.id) - parseInt(a.id)); // Más recientes primero
+        const cfg = sortedConfigs.find(c => parseInt(c.id) <= ts);
+        return cfg || { id: '1774132800', normal: '2', trasPerdida: '10', numTrasPerdida: '1', salida: '1' };
+    }
+
+    function getActiveConfig() {
+        const configs = JSON.parse(localStorage.getItem('botConfigs')) || [];
+        const sortedConfigs = [...configs].sort((a, b) => parseInt(b.id) - parseInt(a.id));
+        return sortedConfigs.length > 0 ? sortedConfigs[0] : { id: '1774132800', normal: '2', trasPerdida: '10', numTrasPerdida: '1', salida: '1' };
     }
 
     function calculatePortfolioBalance(data) {
@@ -1231,10 +1314,12 @@
         let offsets = JSON.parse(localStorage.getItem('polyOffsets'));
         const customTarget = JSON.parse(localStorage.getItem('polyTarget'));
 
-        if (!offsets) {
-            const target_portfolio = customTarget ? customTarget.p : 697.95;
-            const target_available = customTarget ? customTarget.a : 697.67;
-            const target_desfase = customTarget && customTarget.d !== undefined ? customTarget.d : 0.28;
+        // Recalcular los offsets siempre si se ha fijado un customTarget o si no existen
+        if (!offsets || customTarget) {
+            // Usar customTarget si existe, de lo contrario usar los valores por defecto
+            const target_portfolio = customTarget ? customTarget.p : 1018.11;
+            const target_available = customTarget ? customTarget.a : 1018.00;
+            const target_desfase = customTarget && customTarget.d !== undefined ? customTarget.d : 0;
             
             offsets = {
                 cash_offset: target_available - raw_cash_flow,
@@ -1242,7 +1327,9 @@
                 desfase: target_desfase
             };
             localStorage.setItem('polyOffsets', JSON.stringify(offsets));
-            localStorage.removeItem('polyTarget');
+            if (customTarget) {
+                localStorage.removeItem('polyTarget');
+            }
         }
 
         const available = raw_cash_flow + offsets.cash_offset;
@@ -1757,20 +1844,25 @@
             return;
         }
 
-        let latestTs = 0;
-        bot_sorted_data.forEach(row => {
-            const ts = parseInt(row.timestamp);
-            if (!isNaN(ts) && ts > latestTs) latestTs = ts;
-        });
+        // Usar la fecha seleccionada en la tarjeta del dashboard (si no hay, usar el último ts)
+        let targetTs = window.selectedDailyDateTs;
+        if (!targetTs) {
+            let latestTs = 0;
+            bot_sorted_data.forEach(row => {
+                const ts = parseInt(row.timestamp);
+                if (!isNaN(ts) && ts > latestTs) latestTs = ts;
+            });
+            targetTs = latestTs;
+        }
 
-        if (latestTs === 0) {
+        if (targetTs === 0) {
             renderEmptyChart(ctx);
             return;
         }
 
-        const latestDateObj = new Date(latestTs * 1000);
-        const targetYear = latestDateObj.getFullYear();
-        const targetMonth = latestDateObj.getMonth();
+        const targetDateObj = new Date(targetTs * 1000);
+        const targetYear = targetDateObj.getFullYear();
+        const targetMonth = targetDateObj.getMonth();
 
         const dailyProfits = new Map(); // key: 'DD', value: profit
         
