@@ -1,0 +1,345 @@
+:root {
+  --bg: #0b1020;
+  --accent: #5b8cff;
+  --cyl: #c8102e; /* rojo característico de Castilla y León */
+  --panel: rgba(15, 21, 40, 0.92);
+  --text: #eaf0ff;
+  --muted: #9fb0d8;
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  user-select: none;
+}
+
+#scene {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* ---------- HUD ---------- */
+#hud {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: 14px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: linear-gradient(180deg, rgba(5, 8, 18, 0.7), transparent);
+  z-index: 10;
+  pointer-events: none;
+}
+
+.brand {
+  font-size: 15px;
+  letter-spacing: 0.3px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.brand .dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--cyl);
+  box-shadow: 0 0 12px var(--cyl);
+}
+
+.objetivo {
+  font-size: 13px;
+  color: var(--muted);
+  background: rgba(10, 15, 30, 0.55);
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(120, 150, 220, 0.2);
+}
+
+/* ---------- Panel info ---------- */
+.panel {
+  position: fixed;
+  top: 50%;
+  right: 18px;
+  transform: translateY(-50%);
+  width: min(380px, calc(100vw - 36px));
+  max-height: 80vh;
+  overflow-y: auto;
+  background: var(--panel);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(120, 150, 220, 0.25);
+  border-radius: 18px;
+  padding: 20px;
+  z-index: 20;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  animation: slideIn 0.25s ease;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translate(20px, -50%);
+  }
+}
+
+#panel-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  font-size: 20px;
+  cursor: pointer;
+}
+#panel-close:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.panel-head {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  margin-bottom: 14px;
+  padding-right: 30px;
+}
+
+.panel-icono {
+  font-size: 40px;
+  line-height: 1;
+}
+
+.panel h2 {
+  margin: 0;
+  font-size: 19px;
+}
+
+.familia {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.niveles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.nivel-chip {
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(91, 140, 255, 0.18);
+  border: 1px solid rgba(91, 140, 255, 0.4);
+  color: #cdd9ff;
+}
+
+.descripcion {
+  font-size: 14px;
+  line-height: 1.55;
+  color: #dde6ff;
+  margin: 0 0 16px;
+}
+
+.panel h3 {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--muted);
+  margin: 0 0 8px;
+}
+
+.panel ul {
+  margin: 0 0 16px;
+  padding-left: 18px;
+}
+
+.panel li {
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.meta {
+  border-top: 1px solid rgba(120, 150, 220, 0.18);
+  padding-top: 12px;
+}
+
+.meta p {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: #cdd9ff;
+}
+
+/* ---------- Controles táctiles ---------- */
+.controles {
+  position: fixed;
+  bottom: 24px;
+  left: 24px;
+  z-index: 15;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.controles .fila {
+  display: flex;
+  gap: 8px;
+}
+
+.btn {
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  border: 1px solid rgba(120, 150, 220, 0.3);
+  background: rgba(20, 28, 52, 0.7);
+  color: var(--text);
+  font-size: 20px;
+  cursor: pointer;
+  touch-action: none;
+}
+.btn:active {
+  background: var(--accent);
+}
+
+/* ---------- Intro ---------- */
+.intro {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: radial-gradient(circle at 50% 30%, #16203f, #070a16);
+}
+
+.intro-card {
+  max-width: 520px;
+  background: rgba(13, 19, 38, 0.85);
+  border: 1px solid rgba(120, 150, 220, 0.25);
+  border-radius: 22px;
+  padding: 32px;
+  text-align: center;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+}
+
+.intro h1 {
+  margin: 0 0 6px;
+  font-size: 34px;
+  background: linear-gradient(90deg, #fff, var(--accent));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.intro .sub {
+  font-size: 16px;
+  color: #dde6ff;
+  margin: 0 0 18px;
+}
+
+.intro p {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.intro .hint {
+  color: #ffd9a0;
+}
+
+.teclas span {
+  display: inline-block;
+  padding: 2px 8px;
+  margin: 0 2px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.1);
+  font-size: 12px;
+}
+
+.start {
+  margin: 18px 0 14px;
+  padding: 14px 28px;
+  font-size: 16px;
+  font-weight: 600;
+  border: none;
+  border-radius: 14px;
+  background: linear-gradient(90deg, var(--accent), #7aa2ff);
+  color: #061029;
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+.start:hover {
+  transform: translateY(-2px);
+}
+
+.legal {
+  font-size: 11px;
+  color: #6b7aa0;
+  margin: 8px 0 0;
+}
+
+.loading {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  background: #070a16;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+@media (max-width: 600px) {
+  .panel {
+    top: auto;
+    bottom: 0;
+    right: 0;
+    left: 0;
+    width: 100%;
+    max-height: 60vh;
+    transform: none;
+    border-radius: 18px 18px 0 0;
+    animation: slideUp 0.25s ease;
+  }
+  @keyframes slideUp {
+    from {
+      transform: translateY(40px);
+      opacity: 0;
+    }
+  }
+  .controles {
+    bottom: 16px;
+    left: 16px;
+  }
+  .objetivo {
+    display: none;
+  }
+}
