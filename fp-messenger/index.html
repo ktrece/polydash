@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>FP Messenger · Castilla y León</title>
+    <meta name="description" content="Mini-mundo 3D para explorar la Formación Profesional de Castilla y León. Réplica MVP inspirada en messenger.abeto.co." />
+    <link rel="stylesheet" href="style.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <canvas id="scene"></canvas>
+
+    <!-- HUD superior -->
+    <header id="hud">
+      <div class="brand">
+        <span class="dot"></span>
+        FP Messenger · <strong>Castilla y León</strong>
+      </div>
+      <div id="objetivo" class="objetivo">Acércate a un edificio para conocer su ciclo de FP</div>
+    </header>
+
+    <!-- Panel de información del módulo de FP -->
+    <aside id="panel" class="panel hidden" aria-live="polite">
+      <button id="panel-close" aria-label="Cerrar">×</button>
+      <div class="panel-head">
+        <span id="panel-icono" class="panel-icono">🏥</span>
+        <div>
+          <h2 id="panel-nombre">Nombre</h2>
+          <p id="panel-familia" class="familia">Familia</p>
+        </div>
+      </div>
+      <div class="niveles" id="panel-niveles"></div>
+      <p id="panel-descripcion" class="descripcion"></p>
+      <h3>Ciclos de ejemplo</h3>
+      <ul id="panel-ciclos"></ul>
+      <div class="meta">
+        <p><strong>Duración:</strong> <span id="panel-duracion"></span></p>
+        <p><strong>Salidas:</strong> <span id="panel-salidas"></span></p>
+      </div>
+    </aside>
+
+    <!-- Controles -->
+    <div id="controles" class="controles">
+      <div class="fila">
+        <button class="btn" data-key="forward">▲</button>
+      </div>
+      <div class="fila">
+        <button class="btn" data-key="left">◀</button>
+        <button class="btn" data-key="back">▼</button>
+        <button class="btn" data-key="right">▶</button>
+      </div>
+    </div>
+
+    <!-- Pantalla de inicio -->
+    <div id="intro" class="intro">
+      <div class="intro-card">
+        <h1>FP Messenger</h1>
+        <p class="sub">La Formación Profesional de <strong>Castilla y León</strong>, explorada como un pequeño planeta.</p>
+        <p>Eres mensajero/a en un mundo redondo lleno de edificios. Cada casa es una <strong>familia profesional de FP</strong>: un hospital, un taller de coches, una granja… Acércate a cualquiera para descubrir sus ciclos formativos.</p>
+        <p class="hint">🧭 Una brújula 3D te seguirá siempre, apuntando al edificio más cercano.</p>
+        <p class="teclas"><span>WASD</span> / <span>flechas</span> para moverte · botones táctiles en móvil</p>
+        <button id="start" class="start">Empezar a repartir</button>
+        <p class="legal">Proyecto educativo (MVP) inspirado en <em>messenger.abeto.co</em>. Datos orientativos de FP de Castilla y León. Assets generados por código / libres.</p>
+      </div>
+    </div>
+
+    <div id="loading" class="loading hidden">Cargando planeta…</div>
+
+    <script type="module" src="main.js"></script>
+  </body>
+</html>

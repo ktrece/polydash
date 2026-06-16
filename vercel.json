@@ -1,0 +1,9 @@
+{
+  "redirects": [
+    {
+      "source": "/",
+      "destination": "/fp-messenger/index.html",
+      "permanent": false
+    }
+  ]
+}
